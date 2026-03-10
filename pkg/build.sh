@@ -3,9 +3,27 @@
 # Copyright (c) 2026 RemoteToHome Consulting (https://remotetohome.io)
 # https://github.com/RemoteToHome-io/gl-tailscale-fix
 # Usage: ./pkg/build.sh [version]
-set -e
+set -eu
 
-VERSION="${1:-0.1.0}"
+for cmd in tar gzip sed install du cut; do
+	command -v "$cmd" >/dev/null 2>&1 || {
+		echo "Error: required command not found: $cmd" >&2
+		exit 1
+	}
+done
+
+if [ -n "${1:-}" ]; then
+	RAW_VERSION="$1"
+elif [ -n "${VERSION:-}" ]; then
+	RAW_VERSION="$VERSION"
+elif [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
+	RAW_VERSION="$GITHUB_REF_NAME"
+else
+	RAW_VERSION="0.1.0"
+fi
+
+# Strip optional leading 'v' from Git tags like v1.2.3.
+VERSION="${RAW_VERSION#v}"
 PKG_NAME="gl-tailscale-fix"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"

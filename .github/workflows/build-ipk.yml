@@ -1,0 +1,78 @@
+name: Build IPK
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version (optional, e.g. 1.2.3)"
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: vars
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.version || '' }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.1.0-ci.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build package
+        shell: bash
+        run: |
+          chmod +x pkg/build.sh
+          ./pkg/build.sh "${{ steps.vars.outputs.version }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gl-tailscale-fix_${{ steps.vars.outputs.version }}_all.ipk
+          path: build/out/*.ipk
+          if-no-files-found: error
+
+      - name: Prepare release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          cp "build/out/gl-tailscale-fix_${{ steps.vars.outputs.version }}_all.ipk" \
+             "build/out/gl-tailscale-fix_latest_all.ipk"
+          (
+            cd build/out
+            sha256sum "gl-tailscale-fix_${{ steps.vars.outputs.version }}_all.ipk" > \
+              "gl-tailscale-fix_${{ steps.vars.outputs.version }}_all.ipk.sha256"
+            sha256sum "gl-tailscale-fix_latest_all.ipk" > \
+              "gl-tailscale-fix_latest_all.ipk.sha256"
+          )
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            build/out/gl-tailscale-fix_${{ steps.vars.outputs.version }}_all.ipk
+            build/out/gl-tailscale-fix_${{ steps.vars.outputs.version }}_all.ipk.sha256
+            build/out/gl-tailscale-fix_latest_all.ipk
+            build/out/gl-tailscale-fix_latest_all.ipk.sha256
+            install-gl-tailscale-fix.sh

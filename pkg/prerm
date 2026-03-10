@@ -31,10 +31,11 @@ ip route del unreachable default table 100 2>/dev/null
 _gs=$(ip -4 addr show br-guest 2>/dev/null | awk '/inet /{print $2}' | sed 's|\.[0-9]*/|.0/|')
 [ -n "$_gs" ] && ip rule del to "$_gs" table main 2>/dev/null
 
-# Remove guest routing firewall forwardings (and legacy kill switch rules)
+# Remove guest routing firewall forwardings, masquerade, and legacy kill switch rules
 for section in ts_fix_guest2ts ts_fix_ts2guest ts_ks_lan2wan ts_ks_guest2wan; do
     uci -q delete firewall."$section" 2>/dev/null
 done
+uci -q delete firewall.tailscale0.masq 2>/dev/null
 uci commit firewall 2>/dev/null
 /etc/init.d/firewall reload 2>/dev/null
 

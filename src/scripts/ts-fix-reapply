@@ -28,11 +28,15 @@ if [ "$enabled" != "1" ]; then
         uci -q delete firewall.$section 2>/dev/null
     done
 
-    # Remove guest<->tailscale firewall forwardings
+    # Remove guest<->tailscale firewall forwardings and masquerade
     _fw=0
     [ -n "$(uci -q get firewall.ts_fix_guest2ts)" ] && {
         uci -q delete firewall.ts_fix_guest2ts
         uci -q delete firewall.ts_fix_ts2guest
+        _fw=1
+    }
+    [ "$(uci -q get firewall.tailscale0.masq)" = "1" ] && {
+        uci -q delete firewall.tailscale0.masq
         _fw=1
     }
     [ "$_fw" = "1" ] && { uci commit firewall; /etc/init.d/firewall reload; }
@@ -141,6 +145,17 @@ else
     if [ -n "$(uci -q get firewall.ts_fix_guest2ts)" ]; then
         uci -q delete firewall.ts_fix_guest2ts
         uci -q delete firewall.ts_fix_ts2guest
+        uci commit firewall
+        /etc/init.d/firewall reload
+    fi
+fi
+
+# Ensure tailscale0 zone masquerade (defense-in-depth for cross-subnet routing —
+# Tailscale's built-in SNAT can fail to reinitialize after daemon restart on fw3
+# kernels, causing forwarded LAN client traffic to break)
+if [ -n "$(uci -q get firewall.tailscale0)" ]; then
+    if [ "$(uci -q get firewall.tailscale0.masq)" != "1" ]; then
+        uci set firewall.tailscale0.masq=1
         uci commit firewall
         /etc/init.d/firewall reload
     fi

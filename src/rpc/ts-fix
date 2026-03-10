@@ -139,6 +139,20 @@ local function set_guest_ts_fw(enabled)
     return changed
 end
 
+-- Helper: ensure tailscale0 zone masquerade is enabled (defense-in-depth
+-- for cross-subnet routing — Tailscale's built-in SNAT can fail to
+-- reinitialize after daemon restart on fw3 kernels)
+local function ensure_masquerade()
+    local c = uci.cursor()
+    if c:get(FW_CONFIG, "tailscale0") and c:get(FW_CONFIG, "tailscale0", "masq") ~= "1" then
+        c:set(FW_CONFIG, "tailscale0", "masq", "1")
+        c:commit(FW_CONFIG)
+        ngx.pipe.spawn({"/etc/init.d/firewall", "reload"})
+        return true
+    end
+    return false
+end
+
 -- Helper: fix guest subnet policy route for exit node compatibility.
 -- When the guest subnet is advertised, Tailscale creates a source-based rule
 -- at priority 0: "from <guest_subnet> lookup main". This catches ALL traffic
@@ -244,6 +258,9 @@ function M.get_config()
     -- Guest routing firewall forwarding state
     res.route_guest_fw_active = c:get(FW_CONFIG, "ts_fix_guest2ts") ~= nil
 
+    -- Tailscale0 zone masquerade state
+    res.masquerade_active = c:get(FW_CONFIG, "tailscale0", "masq") == "1"
+
     return res
 end
 
@@ -312,6 +329,9 @@ function M.set_config(params)
         -- update_guest_route which triggers Tailscale to create its rules.
         fix_guest_policy_route(rg)
     end
+
+    -- Ensure tailscale0 zone masquerade (defense-in-depth for subnet routing)
+    ensure_masquerade()
 
     return {}
 end
