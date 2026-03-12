@@ -66,7 +66,7 @@ verify_checksum
 
 # Restore original GL wrapper if it was modified (e.g., users who manually
 # added --advertise-exit-node before the plugin existed). The plugin handles
-# exit node natively, so the manual hack is no longer needed.
+# exit node natively, so the manual modification must be reverted to prevent conflicts.
 if [ -f '/rom/usr/bin/gl_tailscale' ] && ! cmp -s '/rom/usr/bin/gl_tailscale' '/usr/bin/gl_tailscale'; then
     echo "Restoring original GL wrapper (plugin handles exit node natively)..."
     if ! cp '/rom/usr/bin/gl_tailscale' '/usr/bin/gl_tailscale'; then

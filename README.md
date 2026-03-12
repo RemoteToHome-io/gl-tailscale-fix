@@ -2,7 +2,7 @@
 
 Plugin package that fixes and enhances the Tailscale integration on GL.iNet routers. Adds missing
 features through GUI controls injected into the existing GL admin Tailscale page
-— without modifying any GL scripts or binaries.
+— no GL scripts or binaries are modified from their factory state.
 
 **[Setup Guide & User Documentation](https://remotetohome.io/gl-tailscale-fix)**
 — screenshots, step-by-step exit node setup, kill switch verification, DNS configuration,
@@ -24,6 +24,17 @@ Tailscale admin console walkthrough.
   nodes and are covered by the kill switch.
 - **Tailscale Version Manager** — installed vs latest version display, one-click
   update using space-optimized combined binaries, factory restore.
+
+  > **⚠️ Do not run `tailscale update` from SSH or use the Tailscale Web Dashboard
+  > update button.** These install the standard upstream binaries (~37MB daemon +
+  > ~15MB CLI = ~52MB total). GL routers have limited flash overlay — installing
+  > 52MB of binaries can exhaust the overlay filesystem and potentially brick the
+  > router. The Version Manager uses [Admonstrator's combined
+  > binaries](https://github.com/Admonstrator/glinet-tailscale-updater) (~5.3MB)
+  > which actually *free* space compared to GL's factory binary (~23MB). If you
+  > accidentally run `tailscale update`, use the **Restore** button to revert to
+  > factory, then update through the plugin.
+
 - **Plugin Update Notification** — automatically checks GitHub for newer
   gl-tailscale-fix releases and shows an update badge with download link in the
   admin panel.
@@ -32,7 +43,11 @@ Tailscale admin console walkthrough.
   restart, particularly on fw3 (iptables) kernels, causing cross-subnet LAN
   traffic from client devices to break. The masquerade provides defense-in-depth
   SNAT at the firewall layer. Applied automatically — no user action required.
-- **Clean integration** — no GL scripts or binaries modified. All integration
+- **Clean integration** — no GL scripts or binaries are altered from their
+  factory state. If the installer detects a user-modified `gl_tailscale`
+  wrapper (e.g. a manual `--advertise-exit-node` modification), it restores
+  the original from ROM to prevent conflicts — the plugin handles exit node
+  natively. All integration
   through standard OpenWrt interfaces (UCI, hotplug, procd, nginx includes).
   Clean install and removal.
 
@@ -88,11 +103,12 @@ files are removed.
 
 Pure Lua, shell, and vanilla JavaScript — no compiled binaries. Single `.ipk`
 package under 50KB. Works as a non-invasive overlay — no GL.iNet scripts or
-binaries are modified. All integration uses standard OpenWrt interfaces (UCI,
-hotplug, procd, nginx includes) and GL's existing extension points. The only
-GL-managed UCI attribute touched is `firewall.tailscale0.masq` (masquerade on
-the Tailscale firewall zone). Install adds files and one zone attribute; removal
-leaves the system exactly as it was.
+binaries are altered from their factory state. All integration uses standard
+OpenWrt interfaces (UCI, hotplug, procd, nginx includes) and GL's existing
+extension points. The only GL-managed UCI attribute touched is
+`firewall.tailscale0.masq` (masquerade on the Tailscale firewall zone).
+Install adds files and one zone attribute; removal leaves the system exactly
+as it was.
 
 - **Backend**: Custom Lua RPC module (`ts-fix`) loaded by GL's OpenResty API
   dispatcher. Own UCI config file `/etc/config/ts-fix` — never touches GL's
