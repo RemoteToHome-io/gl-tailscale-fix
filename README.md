@@ -55,33 +55,36 @@ Tailscale admin console walkthrough.
 
 Download the latest `.ipk` from [Releases](https://github.com/RemoteToHome-io/gl-tailscale-fix/releases).
 
-### One-command installer for quick CLI installation
+### Option A: One-command installer (recommended)
+
+SSH into your router and run:
 
 ```sh
 wget -q https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/latest/download/install-gl-tailscale-fix.sh -O install-gl-tailscale-fix.sh && sh install-gl-tailscale-fix.sh
 ```
 
-Stable installer script URL:
+The installer downloads the latest `.ipk`, verifies the sha256 checksum, and
+runs `opkg install`. It also automatically restores the stock `gl_tailscale`
+wrapper if you previously modified it for exit node support.
 
-```text
-https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/latest/download/install-gl-tailscale-fix.sh
-```
+### Option B: Manual installation via SSH
 
-The installer script downloads the latest `.ipk`, verifies it against the
-published `sha256` file, and only then runs `opkg install`.
-
-### Manual installation
+From your computer, copy the `.ipk` to the router and install:
 
 ```bash
 scp -O gl-tailscale-fix_*.ipk root@<router-ip>:/tmp/
 ssh root@<router-ip> opkg install /tmp/gl-tailscale-fix_*.ipk
 ```
 
-> **Pre-install check:** If you previously modified `/usr/bin/gl_tailscale` to add
-> `--advertise-exit-node`, revert that change before installing. gl-tailscale-fix
-> manages exit node advertisement through its own mechanism.
->
-> Check: `grep 'advertise-exit-node' /usr/bin/gl_tailscale`
+### Option C: LuCI web interface
+
+1. Download the `.ipk` file from [Releases](https://github.com/RemoteToHome-io/gl-tailscale-fix/releases) to your computer
+2. Open **LuCI** (Advanced Settings) → **System** → **Software**
+3. Click **Upload Package** and select the `.ipk` file
+
+> **Note:** If you previously modified `/usr/bin/gl_tailscale` to add
+> `--advertise-exit-node`, the plugin automatically restores the stock version
+> during installation. The plugin handles exit node advertisement natively.
 
 After installation, navigate to **APPLICATIONS → Tailscale** in the GL admin panel.
 Controls appear below GL's settings under a "Tailscale Enhanced" divider.
