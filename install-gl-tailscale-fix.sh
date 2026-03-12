@@ -52,6 +52,9 @@ verify_checksum() {
     return 1
 }
 
+cleanup() { rm -f "${IPK_PATH}" "${SHA_PATH}"; }
+trap cleanup EXIT
+
 echo "Downloading ${IPK_NAME}..."
 download_file "${BASE_URL}/${IPK_NAME}" "${IPK_PATH}"
 
@@ -61,9 +64,11 @@ download_file "${BASE_URL}/${SHA_NAME}" "${SHA_PATH}"
 echo "Verifying checksum..."
 verify_checksum
 
-# Restore original GL wrapper if present before package install.
-if [ -f '/rom/usr/bin/gl_tailscale' ]; then
-    echo "Restoring original GL wrapper before package installation..."
+# Restore original GL wrapper if it was modified (e.g., users who manually
+# added --advertise-exit-node before the plugin existed). The plugin handles
+# exit node natively, so the manual hack is no longer needed.
+if [ -f '/rom/usr/bin/gl_tailscale' ] && ! cmp -s '/rom/usr/bin/gl_tailscale' '/usr/bin/gl_tailscale'; then
+    echo "Restoring original GL wrapper (plugin handles exit node natively)..."
     if ! cp '/rom/usr/bin/gl_tailscale' '/usr/bin/gl_tailscale'; then
         echo "Warning: Could not restore /usr/bin/gl_tailscale from /rom; continuing installation." >&2
     fi

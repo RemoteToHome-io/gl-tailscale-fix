@@ -43,7 +43,7 @@ Download the latest `.ipk` from [Releases](https://github.com/RemoteToHome-io/gl
 ### One-command installer for quick CLI installation
 
 ```sh
-wget -q https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/latest/download/install-gl-tailscale-fix.sh -O install-gl-tailscale-fix.sh ; sh install-gl-tailscale-fix.sh
+wget -q https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/latest/download/install-gl-tailscale-fix.sh -O install-gl-tailscale-fix.sh && sh install-gl-tailscale-fix.sh
 ```
 
 Stable installer script URL:

@@ -1,7 +1,7 @@
 name: Build IPK
 
 permissions:
-  contents: write
+  contents: read
 
 on:
   push:
@@ -20,6 +20,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -28,9 +30,11 @@ jobs:
       - name: Resolve version
         id: vars
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version || '' }}
         run: |
-          if [[ -n "${{ github.event.inputs.version || '' }}" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
+          if [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"
           elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
