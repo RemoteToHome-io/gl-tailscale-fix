@@ -91,6 +91,10 @@ ssh root@<router-ip> opkg install /tmp/gl-tailscale-fix_*.ipk
 After installation, navigate to **APPLICATIONS → Tailscale** in the GL admin panel.
 Controls appear below GL's settings under a "Tailscale Enhanced" divider.
 
+> **After clicking Apply**, it's normal for Tailscale to show a yellow/connecting
+> state for 10–20 seconds while settings take effect. Wait for the status to
+> return to green before testing your connection.
+
 For the full setup walkthrough — including exit node configuration, Tailscale admin
 console approval, DNS setup, and kill switch verification — see the
 **[setup guide](https://remotetohome.io/gl-tailscale-fix#setup-guide)**.
