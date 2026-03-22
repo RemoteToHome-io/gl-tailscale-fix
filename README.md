@@ -200,8 +200,8 @@ as it was.
 Requires standard Linux tools (tar, gzip, install). No OpenWrt SDK needed.
 
 ```bash
-./pkg/build.sh 1.0.16
-# Output: build/out/gl-tailscale-fix_1.0.16_all.ipk
+./pkg/build.sh 1.0.17
+# Output: build/out/gl-tailscale-fix_1.0.17_all.ipk
 ```
 
 ## Compatibility
@@ -262,8 +262,8 @@ Commercial licensing available for closed source use — contact [remotetohome.i
 
 | Model | Device | FW | OpenWrt | Firewall | Plugin | Tailscale |
 |-------|--------|----|--------|----------|--------|-----------|
-| GL-AXT1800 | Slate AX | 4.8.2 | 23.05 | fw4 | v1.0.16 | 1.80.3 / 1.94.2 |
-| GL-MT3000 | Beryl AX | 4.8.2β | 21.02 | fw3 | v1.0.16 | 1.80.3 / 1.94.2 |
+| GL-AXT1800 | Slate AX | 4.8.2 | 23.05 | fw4 | v1.0.17 | 1.80.3 / 1.94.2 |
+| GL-MT3000 | Beryl AX | 4.8.2β | 21.02 | fw3 | v1.0.17 | 1.80.3 / 1.94.2 |
 | GL-AX1800 | Flint | 4.6.8 | 21.02 | fw3 | v1.0.5 † | 1.66.4 |
 | GL-MT2500 | Brume 2 | 4.7.4 | 21.02 | fw3 | v1.0.5 † | 1.66.4 |
 | GL-MT6000 | Flint 2 | 4.8.3 | 21.02 | fw3 | v1.0.5 † | 1.80.3 |
