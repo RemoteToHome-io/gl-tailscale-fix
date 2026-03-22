@@ -254,6 +254,7 @@ function M.get_config()
     res.advertise_exit_node = c:get(TS_FIX_CONFIG, "settings", "advertise_exit_node") == "1"
     res.kill_switch = c:get(TS_FIX_CONFIG, "settings", "kill_switch") == "1"
     res.route_guest = c:get(TS_FIX_CONFIG, "settings", "route_guest") == "1"
+    res.tailscale_ssh = c:get(TS_FIX_CONFIG, "settings", "tailscale_ssh") == "1"
 
     -- GL's Tailscale UCI settings
     res.ts_enabled = c:get(TS_CONFIG, "settings", "enabled") == "1"
@@ -269,14 +270,19 @@ function M.get_config()
             res.ts_running = status.BackendState == "Running"
             if status.Self then
                 res.exit_node_active = status.Self.ExitNodeOption == true
+                -- SSH live state: SSHHostKeys is present when SSH server is active
+                res.ssh_active = type(status.Self.SSHHostKeys) == "table"
+                    and #status.Self.SSHHostKeys > 0
             end
         else
             res.ts_running = false
             res.exit_node_active = false
+            res.ssh_active = false
         end
     else
         res.ts_running = false
         res.exit_node_active = false
+        res.ssh_active = false
     end
 
     -- Installed version (cached — only changes after update/restore which
@@ -308,6 +314,7 @@ end
     @in  bool  ?advertise_exit_node   Enable/disable exit node advertisement
     @in  bool  ?kill_switch           Enable/disable kill switch
     @in  bool  ?route_guest           Enable/disable guest network routing via Tailscale
+    @in  bool  ?tailscale_ssh         Enable/disable Tailscale SSH server
 --]]
 function M.set_config(params)
     local c = uci.cursor()
@@ -320,6 +327,7 @@ function M.set_config(params)
 
     local exit_node_changed = false
     local route_changed = false
+    local ssh_changed = false
 
     -- Handle advertise_exit_node
     if params.advertise_exit_node ~= nil then
@@ -343,6 +351,13 @@ function M.set_config(params)
         route_changed = true
     end
 
+    -- Handle tailscale_ssh
+    if params.tailscale_ssh ~= nil then
+        local val = params.tailscale_ssh and "1" or "0"
+        c:set(TS_FIX_CONFIG, "settings", "tailscale_ssh", val)
+        ssh_changed = true
+    end
+
     c:commit(TS_FIX_CONFIG)
     fs.sync()
 
@@ -353,6 +368,16 @@ function M.set_config(params)
             exec("/usr/sbin/tailscale set --advertise-exit-node 2>/dev/null")
         else
             exec("/usr/sbin/tailscale set --advertise-exit-node=false 2>/dev/null")
+        end
+    end
+
+    -- Apply SSH setting (only when it was actually changed)
+    if ssh_changed then
+        local ssh = c:get(TS_FIX_CONFIG, "settings", "tailscale_ssh") == "1"
+        if ssh then
+            exec("/usr/sbin/tailscale set --ssh 2>/dev/null")
+        else
+            exec("/usr/sbin/tailscale set --ssh=false 2>/dev/null")
         end
     end
 

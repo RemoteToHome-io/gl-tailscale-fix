@@ -19,8 +19,11 @@ if [ -x /etc/init.d/ts-fix ]; then
     /etc/init.d/ts-fix disable 2>/dev/null
 fi
 
-# Disable exit node advertisement
-/usr/sbin/tailscale set --advertise-exit-node=false 2>/dev/null
+# Disable exit node advertisement and Tailscale SSH
+# pgrep guard — avoids spawning Go process if daemon already stopped;
+# GL's tailscale up --reset will clear these flags on next restart anyway
+pgrep tailscaled >/dev/null 2>&1 && \
+    /usr/sbin/tailscale set --advertise-exit-node=false --ssh=false 2>/dev/null
 
 # Remove kill switch routing rules
 ip rule del iif br-lan priority 5280 lookup 100 2>/dev/null

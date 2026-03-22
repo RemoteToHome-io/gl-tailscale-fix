@@ -3,3 +3,6 @@ build/
 
 # Internal documentation (not published)
 docs/
+
+# Benchmark scripts and results (internal test tooling)
+bench/

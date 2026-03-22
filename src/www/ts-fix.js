@@ -260,6 +260,7 @@ var TIPS = {
   exitNode: 'Advertise this router as a Tailscale exit node so remote devices can route all traffic through it. Requires "Allow Remote Access WAN" to be enabled above.',
   killSwitch: 'Routing-level kill switch - Uses policy routing to block all LAN/Guest traffic from reaching the WAN directly when Custom Exit Node routing is active and the tunnel connection is interrupted (e.g. an exit node drop). Persists even if tailscaled crashes or fails to start.',
   routeGuest: 'Extends GL\'s "Allow Remote Access" to the Guest network. Adds Guest\u2194Tailscale forwardings and advertises the guest subnet to your tailnet.',
+  tailscaleSsh: 'Run a Tailscale SSH server on this router, allowing passwordless SSH from Tailscale peers. Requires an SSH ACL rule in the Tailscale admin console (Access Controls \u2192 Tailscale SSH tab). Note: this takes over port 22 for Tailscale traffic \u2014 LAN clients using subnet routing cannot use it. For access from both Tailscale peers and LAN clients, consider adding an alternate SSH port (e.g. 2222) in System \u2192 Administration \u2192 SSH Access instead.',
   version: 'Manage Tailscale binary version. Combined binaries provided by admonstrator/glinet-tailscale-updater.'
 };
 
@@ -325,6 +326,7 @@ function buildSection() {
 
   // Advertise as Exit Node (new server-side functionality)
   section.appendChild(createToggleRow('exit-node', 'Advertise as Exit Node', TIPS.exitNode));
+  section.appendChild(createToggleRow('tailscale-ssh', 'Enable Tailscale SSH', TIPS.tailscaleSsh));
 
   // WAN warning (shown when exit node ON but Allow Remote Access WAN is OFF)
   var wanWarn = document.createElement('div');
@@ -373,12 +375,14 @@ var state = {
   advertise_exit_node: false,
   kill_switch: false,
   route_guest: false,
+  tailscale_ssh: false,
   ts_enabled: false,
   ts_running: false,
   wan_enabled: false,
   ts_version: 'unknown',
   exit_node_ip: '',
   exit_node_active: false,
+  ssh_active: false,
   kill_switch_fw_active: false,
   route_guest_fw_active: false
 };
@@ -431,6 +435,7 @@ function refreshUI() {
   // Hide toggle rows entirely when Tailscale is disabled
   showRow('exit-node', state.ts_enabled);
   showRow('route-guest', state.ts_enabled);
+  showRow('tailscale-ssh', state.ts_enabled);
   // Show kill switch when exit node is configured (backend) OR toggled on in GL UI (pre-Apply)
   showRow('kill-switch', state.ts_enabled && (state.exit_node_ip !== '' || isGlExitNodeEnabled()));
 
@@ -456,6 +461,7 @@ function refreshUI() {
 
   setToggle('exit-node', state.advertise_exit_node, notReady);
   setToggle('route-guest', state.route_guest, notReady);
+  setToggle('tailscale-ssh', state.tailscale_ssh, notReady);
   setToggle('kill-switch', state.kill_switch, notReady);
 
   // WAN warning: show when exit node enabled but Allow Remote Access WAN is off
@@ -756,6 +762,10 @@ function reapplyAfterGlRestart() {
       params.route_guest = true;
       needReapply = true;
     }
+    if (state.tailscale_ssh) {
+      params.tailscale_ssh = true;
+      needReapply = true;
+    }
 
     if (needReapply) {
       rpc('ts-fix', 'set_config', params).then(function() {
@@ -784,6 +794,10 @@ function reapplyAfterGlRestart() {
       }
       if (state.route_guest && !res.route_guest_fw_active) {
         fixParams.route_guest = true;
+        needFix = true;
+      }
+      if (state.tailscale_ssh && !res.ssh_active) {
+        fixParams.tailscale_ssh = true;
         needFix = true;
       }
 
@@ -864,6 +878,7 @@ function inject() {
   var toggles = {
     'exit-node': 'advertise_exit_node',
     'route-guest': 'route_guest',
+    'tailscale-ssh': 'tailscale_ssh',
     'kill-switch': 'kill_switch'
   };
 

@@ -22,6 +22,13 @@ Tailscale admin console walkthrough.
   network (br-guest) and Tailscale interface (tailscale0), guest subnet route
   advertisement, and policy route fixup that ensures guest clients can use exit
   nodes and are covered by the kill switch.
+- **Tailscale SSH** — GUI toggle for `tailscale set --ssh`, enabling passwordless
+  SSH access from Tailscale peers. Requires an SSH ACL rule in the Tailscale
+  admin console (Access Controls → Tailscale SSH tab). Note: Tailscale SSH
+  takes over port 22 for Tailscale traffic — LAN clients using subnet routing
+  cannot use it. For SSH access from both Tailscale peers and LAN clients,
+  consider adding an alternate Dropbear port (e.g. 2222) in
+  System → Administration → SSH Access instead.
 - **Tailscale Version Manager** — installed vs latest version display, one-click
   update using space-optimized combined binaries, factory restore.
 
@@ -193,8 +200,8 @@ as it was.
 Requires standard Linux tools (tar, gzip, install). No OpenWrt SDK needed.
 
 ```bash
-./pkg/build.sh 1.0.15
-# Output: build/out/gl-tailscale-fix_1.0.15_all.ipk
+./pkg/build.sh 1.0.16
+# Output: build/out/gl-tailscale-fix_1.0.16_all.ipk
 ```
 
 ## Compatibility
@@ -255,8 +262,8 @@ Commercial licensing available for closed source use — contact [remotetohome.i
 
 | Model | Device | FW | OpenWrt | Firewall | Plugin | Tailscale |
 |-------|--------|----|--------|----------|--------|-----------|
-| GL-AXT1800 | Slate AX | 4.8.2 | 23.05 | fw4 | v1.0.15 | 1.80.3 / 1.94.2 |
-| GL-MT3000 | Beryl AX | 4.8.2β | 21.02 | fw3 | v1.0.15 | 1.80.3 / 1.94.2 |
+| GL-AXT1800 | Slate AX | 4.8.2 | 23.05 | fw4 | v1.0.16 | 1.80.3 / 1.94.2 |
+| GL-MT3000 | Beryl AX | 4.8.2β | 21.02 | fw3 | v1.0.16 | 1.80.3 / 1.94.2 |
 | GL-AX1800 | Flint | 4.6.8 | 21.02 | fw3 | v1.0.5 † | 1.66.4 |
 | GL-MT2500 | Brume 2 | 4.7.4 | 21.02 | fw3 | v1.0.5 † | 1.66.4 |
 | GL-MT6000 | Flint 2 | 4.8.3 | 21.02 | fw3 | v1.0.5 † | 1.80.3 |
@@ -268,8 +275,8 @@ Commercial licensing available for closed source use — contact [remotetohome.i
 **‡** Community-verified: install/remove, UI injection, kill switch, guest routing ([#1](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/1)).
 
 All features verified on AXT1800 and MT3000 with both factory (v1.80.3) and
-updated (v1.94.2) Tailscale binaries: exit node advertisement, routing kill
-switch, guest network routing, version manager (update + restore), OOM
-prevention on 512MB models.
+updated (v1.94.2) Tailscale binaries: exit node advertisement, Tailscale SSH,
+routing kill switch, guest network routing, version manager (update + restore),
+OOM prevention on 512MB models.
 All other models verified for install/remove lifecycle, nginx injection, RPC module
 loading, and UCI config management.

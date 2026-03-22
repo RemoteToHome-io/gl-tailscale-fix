@@ -45,7 +45,7 @@ fi
 # tailscale flags. Runs in background to not block opkg — ts-fix-reapply
 # handles its own timing (waits for tailscale Running state, uses flock).
 if [ -x /usr/bin/ts-fix-reapply ]; then
-    /usr/bin/ts-fix-reapply &
+    /usr/bin/ts-fix-reapply >/dev/null 2>&1 &
 fi
 
 exit 0

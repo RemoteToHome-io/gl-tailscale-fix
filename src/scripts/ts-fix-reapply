@@ -23,8 +23,9 @@ if [ "$enabled" != "1" ]; then
     _gs=$(ip -4 addr show br-guest 2>/dev/null | awk '/inet /{print $2}' | sed 's|\.[0-9]*/|.0/|')
     [ -n "$_gs" ] && ip rule del to "$_gs" table main 2>/dev/null
 
-    # Remove guest subnet from advertised routes
-    if [ -n "$_gs" ]; then
+    # Remove guest subnet from advertised routes (pgrep guard — avoids
+    # spawning ~60MB Go process if daemon already stopped during disable)
+    if [ -n "$_gs" ] && pgrep tailscaled >/dev/null 2>&1; then
         _cur=$(/usr/sbin/tailscale debug prefs 2>/dev/null | jsonfilter -e '@.AdvertiseRoutes[*]' 2>/dev/null | tr '\n' ',')
         case ",$_cur," in
             *",$_gs,"*)
@@ -56,10 +57,14 @@ if [ "$enabled" != "1" ]; then
     }
     [ "$_fw" = "1" ] && { uci commit firewall; /etc/init.d/firewall reload; }
 
+    # Disable Tailscale SSH (pgrep guard — avoids spawning Go process if daemon already stopped)
+    pgrep tailscaled >/dev/null 2>&1 && /usr/sbin/tailscale set --ssh=false 2>/dev/null
+
     # Reset all ts-fix UCI settings to 0
     uci -q set ts-fix.settings.kill_switch=0
     uci -q set ts-fix.settings.route_guest=0
     uci -q set ts-fix.settings.advertise_exit_node=0
+    uci -q set ts-fix.settings.tailscale_ssh=0
     uci commit ts-fix
 
     exit 0
@@ -69,7 +74,6 @@ fi
 LOCK="/tmp/ts-fix-reapply.lock"
 exec 200>"$LOCK"
 flock -n 200 || exit 0
-trap 'rm -f "$LOCK"' EXIT
 
 # GL's 19-tailscale-iface calls "gl_tailscale restart &" (async).
 # That script does: tailscale restart -> network setup -> tailscale up --reset.
@@ -87,23 +91,26 @@ while [ $i -lt 60 ]; do
 done
 
 # Now wait for Running state (up to 30s)
+# pgrep guard avoids spawning ~60MB Go CLI while daemon is still starting
 i=0
 state=""
 while [ $i -lt 30 ]; do
-    state=$(/usr/sbin/tailscale status --json 2>/dev/null | jsonfilter -e '@.BackendState' 2>/dev/null)
-    [ "$state" = "Running" ] && break
+    if pgrep tailscaled >/dev/null 2>&1; then
+        state=$(/usr/sbin/tailscale status --json 2>/dev/null | jsonfilter -e '@.BackendState' 2>/dev/null)
+        [ "$state" = "Running" ] && break
+    fi
     sleep 1
     i=$((i + 1))
 done
 [ "$state" = "Running" ] || exit 0
 
-# Re-apply exit node advertisement
+# Re-apply exit node advertisement (skip false — already cleared by --reset)
 adv=$(uci -q get ts-fix.settings.advertise_exit_node)
-if [ "$adv" = "1" ]; then
-    /usr/sbin/tailscale set --advertise-exit-node 2>/dev/null
-else
-    /usr/sbin/tailscale set --advertise-exit-node=false 2>/dev/null
-fi
+[ "$adv" = "1" ] && /usr/sbin/tailscale set --advertise-exit-node 2>/dev/null
+
+# Re-apply Tailscale SSH (skip false — already cleared by --reset)
+ts_ssh=$(uci -q get ts-fix.settings.tailscale_ssh)
+[ "$ts_ssh" = "1" ] && /usr/sbin/tailscale set --ssh 2>/dev/null
 
 # Re-apply guest subnet route advertisement
 route_guest=$(uci -q get ts-fix.settings.route_guest)
