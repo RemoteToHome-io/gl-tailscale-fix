@@ -207,7 +207,7 @@ Requires standard Linux tools (tar, gzip, install). No OpenWrt SDK needed.
 ## Compatibility
 
 **Should work** on any GL.iNet router with native Tailscale support running
-firmware 4.6.x - 4.8.x (tested on 4.6.8 through 4.8.5). Both fw3 (iptables) and
+firmware 4.x (tested on 4.5.22 through 4.8.5). Both fw3 (iptables) and
 fw4 (nftables) are supported — the kill switch uses kernel routing (not
 firewall-specific), guest forwardings use GL's UCI abstraction layer.
 
@@ -269,10 +269,14 @@ Commercial licensing available for closed source use — contact [remotetohome.i
 | GL-MT6000 | Flint 2 | 4.8.3 | 21.02 | fw3 | v1.0.5 † | 1.80.3 |
 | GL-BE3600 | Slate 7 | 4.8.1 | 23.05 | fw4 | v1.0.5 † | 1.80.3 |
 | GL-BE6500 | Flint 3 | 4.8.4 | 23.05 | fw4 | v1.0.5 † | 1.92.5 |
-| GL-MT3600BE | Beryl 7 | 4.8.5 | 21.02 | fw3 | v1.0.13 ‡ | 1.94.2 |
+| GL-MT5000 | Brume 3 | 4.8.4 | 21.02 | fw4 | v1.0.17 ¶ | 1.80.3 / 1.96.3 |
+| GL-MT3600BE | Beryl 7 | 4.8.5 | 21.02 | fw3 | v1.0.17 ‡¶ | 1.94.2 |
+| GL-A1300 | Slate Plus | 4.5.22 / 4.7.2β | — | fw3 | v1.0.17 §  | 1.6x |
 
 **†** Install/remove verified only (Tailscale not connected — feature testing pending).
 **‡** Community-verified: install/remove, UI injection, kill switch, guest routing ([#1](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/1)).
+**¶** Install + version manager (update to 1.96.3) verified.
+**§** Plugin install verified on FW 4.5.22 and 4.7.2β. Exit node client + kill switch verified on 4.7.2β. Version manager not supported — Tailscale's own updater also fails on this model ([#6](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/6)).
 
 All features verified on AXT1800 and MT3000 with both factory (v1.80.3) and
 updated (v1.94.2) Tailscale binaries: exit node advertisement, Tailscale SSH,
