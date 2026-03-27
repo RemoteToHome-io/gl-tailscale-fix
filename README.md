@@ -29,6 +29,8 @@ Tailscale admin console walkthrough.
   cannot use it. For SSH access from both Tailscale peers and LAN clients,
   consider adding an alternate Dropbear port (e.g. 2222) in
   System → Administration → SSH Access instead.
+  See [Tailscale SSH on GL.iNet Routers](https://remotetohome.io/blog/tailscale-ssh-on-glinet/)
+  for a detailed comparison of both approaches.
 - **Tailscale Version Manager** — installed vs latest version display, one-click
   update using space-optimized combined binaries, factory restore.
 
