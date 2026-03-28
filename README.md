@@ -228,10 +228,11 @@ fw4 (nftables) are supported — the kill switch uses kernel routing (not
 firewall-specific), guest forwardings use GL's UCI abstraction layer.
 
 > **⚠️ Not yet tested with firmware 4.9.x or later.** GL has made changes to the
-> Tailscale integration and admin GUI in the 4.9.x series. Do not install on
-> 4.9.x firmware until compatibility has been verified — check
+> Tailscale integration and admin GUI in the 4.9.x series. As of v1.0.18, the
+> plugin automatically detects firmware 4.9+ and disables itself with a warning
+> banner rather than risking conflicts. Check
 > [Releases](https://github.com/RemoteToHome-io/gl-tailscale-fix/releases) for
-> updates.
+> updates on 4.9 compatibility.
 
 See the [tested models](#tested-models) appendix for the full compatibility matrix.
 
