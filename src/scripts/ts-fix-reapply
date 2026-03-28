@@ -6,6 +6,69 @@
 # Copyright (c) 2026 RemoteToHome Consulting (https://remotetohome.io)
 # https://github.com/RemoteToHome-io/gl-tailscale-fix
 
+# Firmware compatibility check — GL 4.9+ has native Tailscale enhancements
+# that overlap with our features. Running both creates conflicts.
+check_firmware_compat() {
+    local fw_ver major minor
+    fw_ver=$(awk '{print $1}' /etc/glversion 2>/dev/null)
+    [ -z "$fw_ver" ] && return 0  # non-GL firmware, assume compatible
+    major=$(echo "$fw_ver" | cut -d. -f1)
+    minor=$(echo "$fw_ver" | cut -d. -f2)
+    if [ "$major" -gt 4 ] 2>/dev/null || \
+       { [ "$major" -eq 4 ] && [ "$minor" -ge 9 ]; } 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+# On incompatible firmware (4.9+), clean up our exclusive state and exit.
+# Does NOT call `tailscale set` — 4.9 manages those flags natively.
+# Kernel routing state is ephemeral (doesn't survive reboot), but clean up
+# in case this runs mid-session after a live firmware upgrade.
+if ! check_firmware_compat; then
+    logger -t ts-fix "Incompatible firmware ($(awk '{print $1}' /etc/glversion 2>/dev/null)) — cleaning up"
+
+    # Remove kill switch routing rules (ours exclusively)
+    ip rule del iif br-lan priority 5280 lookup 100 2>/dev/null
+    ip rule del iif br-guest priority 5280 lookup 100 2>/dev/null
+    ip route del unreachable default table 100 2>/dev/null
+
+    # Remove guest policy route fixup (ours exclusively)
+    _gs=$(ip -4 addr show br-guest 2>/dev/null | awk '/inet /{print $2}' | sed 's|\.[0-9]*/|.0/|')
+    [ -n "$_gs" ] && ip rule del to "$_gs" table main 2>/dev/null
+
+    # Note: guest subnet in Tailscale's advertised routes is NOT removed here.
+    # GL's gl_tailscale restart (which runs tailscale up --reset) clears all
+    # advertised routes on next boot. Calling tailscale set here risks conflicts
+    # with 4.9's native route management.
+
+    # Remove our firewall sections and masquerade
+    _fw=0
+    for section in ts_fix_guest2ts ts_fix_ts2guest ts_ks_lan2wan ts_ks_guest2wan; do
+        [ -n "$(uci -q get firewall.$section)" ] && {
+            uci -q delete firewall.$section
+            _fw=1
+        }
+    done
+    [ "$(uci -q get firewall.tailscale0.masq)" = "1" ] && {
+        uci -q delete firewall.tailscale0.masq
+        _fw=1
+    }
+    [ "$_fw" = "1" ] && { uci commit firewall; /etc/init.d/firewall reload 2>/dev/null; }
+
+    # Reset UCI settings
+    uci -q set ts-fix.settings.kill_switch=0
+    uci -q set ts-fix.settings.route_guest=0
+    uci -q set ts-fix.settings.advertise_exit_node=0
+    uci -q set ts-fix.settings.tailscale_ssh=0
+    uci commit ts-fix
+
+    # Disable service so it doesn't restart
+    [ -x /etc/init.d/ts-fix ] && /etc/init.d/ts-fix disable 2>/dev/null
+
+    exit 0
+fi
+
 enabled=$(uci -q get tailscale.settings.enabled)
 
 # If Tailscale is disabled, tear down all ts-fix state and exit.

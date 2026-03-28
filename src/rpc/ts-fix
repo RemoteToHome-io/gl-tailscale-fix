@@ -230,6 +230,24 @@ local function set_killswitch_route(enabled)
     end
 end
 
+-- Firmware compatibility check — GL 4.9+ has native Tailscale enhancements
+-- that overlap with our features. Cached at module load (doesn't change at runtime).
+local function is_firmware_compatible()
+    local f = io.open("/etc/glversion", "r")
+    if not f then return true end  -- non-GL firmware, assume compatible
+    local ver = f:read("*l") or ""
+    f:close()
+    local major, minor = ver:match("^(%d+)%.(%d+)")
+    if not major then return true end
+    major, minor = tonumber(major), tonumber(minor)
+    if major > 4 or (major == 4 and minor >= 9) then
+        return false
+    end
+    return true
+end
+
+local firmware_compatible = is_firmware_compatible()
+
 --[[
     @method-type: call
     @method-name: get_config
@@ -247,6 +265,12 @@ end
     @out bool   route_guest_fw_active  Whether guest→tailscale forwardings are currently active
 --]]
 function M.get_config()
+    -- Report firmware incompatibility to frontend
+    if not firmware_compatible then
+        local fw = exec("awk '{print $1}' /etc/glversion 2>/dev/null") or "unknown"
+        return { firmware_incompatible = true, firmware_version = fw:gsub("%s+$", "") }
+    end
+
     -- Ensure masquerade on every config read (covers first page visit after
     -- install, even if no ts-fix features are active — needed for LAN clients
     -- to reach Tailscale peers through subnet routing)
@@ -322,6 +346,10 @@ end
     @in  bool  ?tailscale_ssh         Enable/disable Tailscale SSH server
 --]]
 function M.set_config(params)
+    if not firmware_compatible then
+        return { err_code = -2, err_msg = "Plugin incompatible with this firmware version" }
+    end
+
     local c = uci.cursor()
 
     -- Check tailscale is enabled

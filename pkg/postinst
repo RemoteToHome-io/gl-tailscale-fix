@@ -27,6 +27,31 @@ if [ -f /usr/sbin/tailscaled ] && [ ! -e /usr/sbin/tailscale ]; then
     ln -sf tailscaled /usr/sbin/tailscale
 fi
 
+# Migrate: clean stale sysupgrade.conf entries from pre-v1.0.18
+# (v1.0.18+ uses keep.d for binary persistence instead of sysupgrade.conf)
+if [ -f /etc/sysupgrade.conf ]; then
+    sed -i '\|^/usr/sbin/tailscale$|d' /etc/sysupgrade.conf 2>/dev/null
+    sed -i '\|^/usr/sbin/tailscaled$|d' /etc/sysupgrade.conf 2>/dev/null
+fi
+
+# Firmware compatibility gate — don't enable service on 4.9+ firmware
+# (native Tailscale enhancements overlap with plugin features)
+fw_ver=$(awk '{print $1}' /etc/glversion 2>/dev/null)
+if [ -n "$fw_ver" ]; then
+    _major=$(echo "$fw_ver" | cut -d. -f1)
+    _minor=$(echo "$fw_ver" | cut -d. -f2)
+    if [ "$_major" -gt 4 ] 2>/dev/null || \
+       { [ "$_major" -eq 4 ] && [ "$_minor" -ge 9 ]; } 2>/dev/null; then
+        logger -t ts-fix "Incompatible firmware ($fw_ver) — plugin installed but service not enabled"
+        # Still restart nginx so incompatibility banner shows in admin panel
+        if [ -x /etc/init.d/nginx ]; then
+            pgrep nginx >/dev/null 2>&1 && kill -9 $(pgrep nginx) 2>/dev/null
+            /etc/init.d/nginx start 2>/dev/null
+        fi
+        exit 0
+    fi
+fi
+
 # Enable and start procd service (registers UCI reload trigger for tailscale config)
 if [ -x /etc/init.d/ts-fix ]; then
     /etc/init.d/ts-fix enable 2>/dev/null

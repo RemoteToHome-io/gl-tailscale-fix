@@ -1,1 +1,27 @@
+# gl-tailscale-fix — sysupgrade persistence
+# Plugin files preserved through GL firmware upgrades (4.8.x minor upgrades).
+# On major upgrades (4.9+), the plugin detects incompatibility and self-disables.
+
+# UCI config (user settings)
 /etc/config/ts-fix
+
+# Plugin components
+/usr/lib/oui-httpd/rpc/ts-fix
+/etc/init.d/ts-fix
+/etc/hotplug.d/iface/20-ts-fix
+/usr/bin/ts-fix-reapply
+/usr/bin/ts-fix-watchdog
+/usr/bin/ts-fix-update
+/etc/nginx/gl-conf.d/ts-fix.conf
+/usr/share/ts-fix/
+
+# This file (self-preservation for next sysupgrade)
+/lib/upgrade/keep.d/gl-tailscale-fix
+
+# Procd service symlinks (auto-start after sysupgrade)
+/etc/rc.d/S99ts-fix
+/etc/rc.d/K01ts-fix
+
+# Tailscale binaries (preserved if updated via Version Manager)
+/usr/sbin/tailscaled
+/usr/sbin/tailscale

@@ -12,6 +12,19 @@ START=99
 USE_PROCD=1
 
 start_service() {
+    # Don't start on incompatible firmware (4.9+ has native overlap)
+    local fw_ver major minor
+    fw_ver=$(awk '{print $1}' /etc/glversion 2>/dev/null)
+    if [ -n "$fw_ver" ]; then
+        major=$(echo "$fw_ver" | cut -d. -f1)
+        minor=$(echo "$fw_ver" | cut -d. -f2)
+        if [ "$major" -gt 4 ] 2>/dev/null || \
+           { [ "$major" -eq 4 ] && [ "$minor" -ge 9 ]; } 2>/dev/null; then
+            logger -t ts-fix "Incompatible firmware ($fw_ver) — service not starting"
+            return 0
+        fi
+    fi
+
     procd_open_instance
     procd_set_param command /usr/bin/ts-fix-watchdog
     procd_set_param respawn 3600 5 5

@@ -170,10 +170,13 @@ do_install() {
     chmod 755 "$TS_DAEMON"
     ln -sf tailscaled "$TS_BIN"
 
-    # Ensure binary persists across sysupgrade (only tailscaled needed —
-    # tailscale is a symlink that survives via ROM or postinst recreation)
-    if ! grep -qF "$TS_DAEMON" "$SYSUPGRADE_CONF" 2>/dev/null; then
-        echo "$TS_DAEMON" >> "$SYSUPGRADE_CONF"
+    # Binary persistence across sysupgrade handled by
+    # /lib/upgrade/keep.d/gl-tailscale-fix (declares /usr/sbin/tailscaled
+    # and /usr/sbin/tailscale). Clean up stale sysupgrade.conf entries
+    # from pre-v1.0.18 installations.
+    if [ -f "$SYSUPGRADE_CONF" ]; then
+        sed -i "\|^${TS_BIN}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
+        sed -i "\|^${TS_DAEMON}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
     fi
 
     set_status "running" "Restarting Tailscale..."
@@ -215,10 +218,10 @@ do_restore() {
     cp -a "/rom${TS_DAEMON}" "$TS_DAEMON"
     chmod 755 "$TS_DAEMON"
 
-    # Remove from sysupgrade.conf (no longer need custom persistence)
+    # Clean up stale sysupgrade.conf entries (v1.0.18+ uses keep.d)
     if [ -f "$SYSUPGRADE_CONF" ]; then
-        sed -i "\|^${TS_BIN}$|d" "$SYSUPGRADE_CONF"
-        sed -i "\|^${TS_DAEMON}$|d" "$SYSUPGRADE_CONF"
+        sed -i "\|^${TS_BIN}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
+        sed -i "\|^${TS_DAEMON}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
     fi
 
     # Restart

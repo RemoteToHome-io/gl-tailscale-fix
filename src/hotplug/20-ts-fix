@@ -6,6 +6,17 @@
 # Copyright (c) 2026 RemoteToHome Consulting (https://remotetohome.io)
 # https://github.com/RemoteToHome-io/gl-tailscale-fix
 
+# Don't run on incompatible firmware (4.9+ has native overlap)
+fw_ver=$(awk '{print $1}' /etc/glversion 2>/dev/null)
+if [ -n "$fw_ver" ]; then
+    _major=$(echo "$fw_ver" | cut -d. -f1)
+    _minor=$(echo "$fw_ver" | cut -d. -f2)
+    if [ "$_major" -gt 4 ] 2>/dev/null || \
+       { [ "$_major" -eq 4 ] && [ "$_minor" -ge 9 ]; } 2>/dev/null; then
+        exit 0
+    fi
+fi
+
 enabled=$(uci -q get tailscale.settings.enabled)
 
 if [ "$ACTION" = "ifup" ] && [ "$enabled" = "1" ]; then

@@ -523,8 +523,46 @@ function refreshUI() {
 
 // -- Data fetching --
 
+function showIncompatibleBanner(fwVersion) {
+  var section = document.getElementById(INJECT_ID);
+  if (!section) return;
+  section.innerHTML = '';
+  var banner = document.createElement('div');
+  banner.style.cssText = 'padding:20px;background:#fff3cd;border:1px solid #ffc107;'
+    + 'border-radius:8px;margin:15px 0;color:#856404;text-align:center;';
+  var strong = document.createElement('strong');
+  strong.textContent = 'gl-tailscale-fix is not compatible with firmware '
+    + (fwVersion || '4.9+') + '.';
+  banner.appendChild(strong);
+  banner.appendChild(document.createElement('br'));
+  banner.appendChild(document.createTextNode(
+    'This firmware version has native Tailscale enhancements that replace the plugin.'));
+  banner.appendChild(document.createElement('br'));
+  banner.appendChild(document.createTextNode('Please remove: '));
+  var code = document.createElement('code');
+  code.style.cssText = 'background:#ffeeba;padding:2px 6px;border-radius:3px;';
+  code.textContent = 'opkg remove gl-tailscale-fix';
+  banner.appendChild(code);
+  banner.appendChild(document.createElement('br'));
+  banner.appendChild(document.createTextNode('Refer to the '));
+  var link = document.createElement('a');
+  link.href = 'https://remotetohome.io/blog/gl-tailscale-fix/';
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.style.cssText = 'color:#856404;text-decoration:underline;';
+  link.textContent = 'plugin documentation';
+  banner.appendChild(link);
+  banner.appendChild(document.createTextNode(' for current compatibility status.'));
+  section.appendChild(banner);
+}
+
 function fetchConfig() {
   rpc('ts-fix', 'get_config', {}).then(function(res) {
+    if (res.firmware_incompatible) {
+      showIncompatibleBanner(res.firmware_version);
+      stopRefreshTimer();
+      return;
+    }
     if (res.err_code) return;
     Object.keys(res).forEach(function(k) {
       // Don't overwrite keys with pending (unstaged) changes
