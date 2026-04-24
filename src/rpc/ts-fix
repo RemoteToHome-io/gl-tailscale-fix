@@ -18,9 +18,12 @@ local TS_CONFIG = "tailscale"
 -- Version check cache TTL (72 hours)
 local CACHE_TTL = 259200
 
--- Cached tailscale version (doesn't change between refreshes; only changes
--- after update/restore which restarts nginx, clearing the module cache)
+-- Cached tailscale version. Invalidated per-worker when the tailscaled
+-- binary mtime changes (i.e. the Version Manager ran an update/restore).
+-- Multiple nginx workers each hold their own cache; mtime check ensures
+-- every worker re-reads after an update, without a nginx restart.
 local cached_ts_version = nil
+local cached_ts_version_mtime = 0
 
 -- Helper: strip version suffix (e.g. "1.94.2-tiny.by.admon.1187" → "1.94.2")
 local function base_ver(v)
@@ -37,6 +40,29 @@ local function exec(cmd)
         return data
     end
     return nil
+end
+
+-- Helper: get mtime of a file as unix seconds. Returns 0 if unavailable.
+-- Uses "date -r" (BusyBox) since GL routers don't ship stat in PATH.
+local function file_mtime(path)
+    local r = ngx.pipe.spawn({"date", "-r", path, "+%s"})
+    if not r then return 0 end
+    local data = r:stdout_read_all()
+    r:wait()
+    return tonumber((data or ""):match("^(%d+)")) or 0
+end
+
+-- Helper: get installed tailscale version. Caches per-worker and
+-- invalidates on tailscaled binary mtime change (Version Manager updates).
+local function get_ts_version()
+    local mtime = file_mtime("/usr/sbin/tailscaled")
+    if cached_ts_version and mtime > 0 and mtime == cached_ts_version_mtime then
+        return cached_ts_version
+    end
+    local ver = exec("/usr/sbin/tailscale version 2>/dev/null")
+    cached_ts_version = ver and base_ver(ver:match("^(%S+)")) or "unknown"
+    cached_ts_version_mtime = mtime
+    return cached_ts_version
 end
 
 -- Helper: check if a cache file is stale (older than CACHE_TTL seconds)
@@ -170,16 +196,28 @@ end
 
 -- Helper: ensure tailscale0 zone masquerade is enabled (defense-in-depth
 -- for cross-subnet routing — Tailscale's built-in SNAT can fail to
--- reinitialize after daemon restart on fw3 kernels)
+-- reinitialize after daemon restart on fw3 kernels).
+-- Returns true when the desired state is reached (either already set, or
+-- we set it successfully). Logs and returns false on unrecoverable errors.
 local function ensure_masquerade()
     local c = uci.cursor()
-    if c:get(FW_CONFIG, "tailscale0") and c:get(FW_CONFIG, "tailscale0", "masq") ~= "1" then
-        c:set(FW_CONFIG, "tailscale0", "masq", "1")
-        c:commit(FW_CONFIG)
-        ngx.pipe.spawn({"/etc/init.d/firewall", "reload"})
-        return true
+    if not c:get(FW_CONFIG, "tailscale0") then
+        ngx.log(ngx.WARN, "ts-fix: tailscale0 firewall zone not found — masquerade not configured")
+        return false
     end
-    return false
+    if c:get(FW_CONFIG, "tailscale0", "masq") == "1" then
+        return true  -- already set
+    end
+    if not c:set(FW_CONFIG, "tailscale0", "masq", "1") then
+        ngx.log(ngx.ERR, "ts-fix: failed to set firewall.tailscale0.masq")
+        return false
+    end
+    if not c:commit(FW_CONFIG) then
+        ngx.log(ngx.ERR, "ts-fix: failed to commit firewall config for masquerade")
+        return false
+    end
+    ngx.pipe.spawn({"/etc/init.d/firewall", "reload"})
+    return true
 end
 
 -- Helper: fix guest subnet policy route for exit node compatibility.
@@ -316,13 +354,10 @@ function M.get_config()
         res.ssh_active = false
     end
 
-    -- Installed version (cached — only changes after update/restore which
-    -- restarts nginx, clearing the module-level cache)
-    if not cached_ts_version then
-        local ver = exec("/usr/sbin/tailscale version 2>/dev/null")
-        cached_ts_version = ver and base_ver(ver:match("^(%S+)")) or "unknown"
-    end
-    res.ts_version = cached_ts_version
+    -- Installed version (cached per-worker; auto-invalidates on tailscaled
+    -- binary mtime change so Version Manager updates reflect without an
+    -- nginx restart).
+    res.ts_version = get_ts_version()
 
     -- Kill switch routing rule state (ip rules for table 100 at priority 5280)
     local ks_rules = exec("ip rule list priority 5280 2>/dev/null") or ""
@@ -393,7 +428,10 @@ function M.set_config(params)
         ssh_changed = true
     end
 
-    c:commit(TS_FIX_CONFIG)
+    if not c:commit(TS_FIX_CONFIG) then
+        ngx.log(ngx.ERR, "ts-fix: failed to commit ts-fix config in set_config")
+        return { err_code = -3, err_msg = "Failed to commit settings — check /etc/config/ts-fix permissions" }
+    end
     fs.sync()
 
     -- Apply exit node setting (only when it was actually changed).
@@ -448,12 +486,8 @@ end
 function M.get_update_info()
     local res = {}
 
-    -- Installed version (cached — see get_config)
-    if not cached_ts_version then
-        local ver = exec("/usr/sbin/tailscale version 2>/dev/null")
-        cached_ts_version = ver and base_ver(ver:match("^(%S+)")) or "unknown"
-    end
-    res.installed_version = cached_ts_version
+    -- Installed version (cached per-worker with mtime invalidation)
+    res.installed_version = get_ts_version()
 
     -- Architecture (hardcoded after first call — doesn't change at runtime)
     local arch = exec("uname -m 2>/dev/null")
@@ -617,8 +651,12 @@ end
 --]]
 function M.dismiss_ks_hint()
     local c = uci.cursor()
-    c:set(TS_FIX_CONFIG, "settings", "ks_upgrade_hint_pending", "0")
-    c:commit(TS_FIX_CONFIG)
+    if not c:set(TS_FIX_CONFIG, "settings", "ks_upgrade_hint_pending", "0") then
+        return { err_code = -1, err_msg = "Failed to update ts-fix config" }
+    end
+    if not c:commit(TS_FIX_CONFIG) then
+        return { err_code = -2, err_msg = "Failed to commit ts-fix config" }
+    end
     return {}
 end
 

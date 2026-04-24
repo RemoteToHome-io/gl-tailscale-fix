@@ -551,8 +551,12 @@ function ensureInformationalBanner() {
 
   // Collapsed state persisted per-router in localStorage. Default collapsed —
   // user has seen it; the header alone is enough to signal "coexisting with GL".
+  // Wrapped in try/catch: strict privacy modes (old Safari, enterprise-locked
+  // browsers) can throw on localStorage access and would otherwise abort the
+  // whole banner injection.
   var STORAGE_KEY = 'ts-fix-fw49-banner-collapsed';
-  var collapsed = localStorage.getItem(STORAGE_KEY) !== '0';
+  var collapsed = true;
+  try { collapsed = localStorage.getItem(STORAGE_KEY) !== '0'; } catch (e) {}
 
   var banner = document.createElement('div');
   banner.id = 'ts-fix-fw49-banner';
@@ -671,9 +675,16 @@ function ensureMigrationHint() {
 }
 
 function dismissKsHint() {
-  state.ks_upgrade_hint_pending = false;
-  ensureMigrationHint();
-  rpc('ts-fix', 'dismiss_ks_hint', {}).catch(function() {});
+  // Wait for the backend to confirm the flag was cleared before hiding the
+  // hint locally. Previous optimistic hide caused a "ghost" hint to return
+  // on the next 10s refresh if the RPC silently failed.
+  rpc('ts-fix', 'dismiss_ks_hint', {}).then(function(res) {
+    if (res && res.err_code) return;  // leave hint visible so user retries
+    state.ks_upgrade_hint_pending = false;
+    ensureMigrationHint();
+  }).catch(function() {
+    // Leave hint visible; next refresh re-fetches state and user can retry.
+  });
 }
 
 // -- Data fetching --

@@ -208,31 +208,36 @@ Requires standard Linux tools (tar, gzip, install). No OpenWrt SDK needed.
 
 ## Firmware upgrades (sysupgrade)
 
-The plugin survives GL.iNet firmware upgrades on firmware 4.x (up to 4.8.x)
-automatically. All plugin files, configuration, and any updated Tailscale binary
-are preserved through sysupgrade via `/lib/upgrade/keep.d/gl-tailscale-fix`.
-After reboot, settings, kill switch, guest routing, and exit node configuration
-are restored automatically by the watchdog and hotplug handlers.
+The plugin survives GL.iNet firmware upgrades automatically on both minor
+(4.8.x → 4.8.y) and major (4.8.x → 4.9.x) releases. All plugin files,
+configuration, and any updated Tailscale binary are preserved through
+sysupgrade via `/lib/upgrade/keep.d/gl-tailscale-fix`. After reboot, settings,
+kill switch, guest routing, and exit node configuration are restored
+automatically by the watchdog and hotplug handlers.
 
-On **firmware 4.9+**, the plugin detects the incompatible firmware, cleanly
-removes its routing rules and firewall state, disables its service, and shows
-a warning banner in the admin panel. Remove the plugin with
-`opkg remove gl-tailscale-fix` — GL's native Tailscale features replace most
-plugin functionality in firmware 4.9+.
+On **firmware 4.9+**, the plugin detects the newer firmware and adapts its UI:
+the Advertise as Exit Node toggle is hidden (GL provides this natively via
+"Run Exit Node"), and an informational banner explains what the plugin
+continues to handle on top of GL's native Tailscale integration — Kill Switch,
+Guest routing through the exit node, Tailscale SSH toggle, and Version
+Manager. See the [blog post](https://remotetohome.io/blog/gl-tailscale-fix/)
+for the full rationale.
 
 ## Compatibility
 
 **Should work** on any GL.iNet router with native Tailscale support running
-firmware 4.x (tested on 4.5.22 through 4.8.5). Both fw3 (iptables) and
+firmware 4.x (tested on 4.5.22 through 4.9.0). Both fw3 (iptables) and
 fw4 (nftables) are supported — the kill switch uses kernel routing (not
 firewall-specific), guest forwardings use GL's UCI abstraction layer.
 
-> **⚠️ Not yet tested with firmware 4.9.x or later.** GL has made changes to the
-> Tailscale integration and admin GUI in the 4.9.x series. As of v1.0.18, the
-> plugin automatically detects firmware 4.9+ and disables itself with a warning
-> banner rather than risking conflicts. Check
-> [Releases](https://github.com/RemoteToHome-io/gl-tailscale-fix/releases) for
-> updates on 4.9 compatibility.
+Starting with **v1.0.19** the plugin coexists with firmware 4.9's native
+Tailscale enhancements. On 4.9+ the plugin auto-detects the firmware, hides
+UI for features GL now provides natively (Advertise as Exit Node, WAN subnet
+advertisement, IP Masquerading), and keeps its own features active —
+most importantly the daemon-independent kernel-level Kill Switch, which
+survives `tailscaled` crashes that Tailscale's built-in kill switch cannot.
+See the [blog post](https://remotetohome.io/blog/gl-tailscale-fix/) for the
+kill-switch rationale.
 
 See the [tested models](#tested-models) appendix for the full compatibility matrix.
 

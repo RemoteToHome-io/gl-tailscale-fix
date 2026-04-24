@@ -1,6 +1,8 @@
 # gl-tailscale-fix — sysupgrade persistence
-# Plugin files preserved through GL firmware upgrades (4.8.x minor upgrades).
-# On major upgrades (4.9+), the plugin detects incompatibility and self-disables.
+# Plugin files preserved through GL firmware upgrades (including 4.8.x → 4.9+).
+# The plugin stays fully active across minor and major firmware upgrades;
+# per-feature UI gating handles overlaps with GL's native Tailscale features
+# on 4.9+ (see src/rpc/ts-fix detect_firmware / src/www/ts-fix.js).
 
 # UCI config (user settings)
 /etc/config/ts-fix

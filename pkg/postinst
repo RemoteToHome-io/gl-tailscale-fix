@@ -54,9 +54,13 @@ fi
 # cleared automatically when the user enables KS via the UI, or by the
 # dismiss button. PKG_UPGRADE=1 is set by opkg on upgrade install.
 if [ "$PKG_UPGRADE" = "1" ] && [ "$is_fw49_plus" = "1" ]; then
-    uci -q set ts-fix.settings.ks_upgrade_hint_pending=1
-    uci commit ts-fix
-    logger -t ts-fix "Firmware $fw_ver upgrade — KS re-enable hint set"
+    if uci -q set ts-fix.settings.ks_upgrade_hint_pending=1 && uci commit ts-fix; then
+        logger -t ts-fix "Firmware $fw_ver upgrade — KS re-enable hint set"
+    else
+        # Log to syslog AND stderr so opkg output surfaces the failure.
+        # Without the hint, the user may not realise their KS needs re-enabling.
+        logger -t ts-fix -s "ERROR: failed to set ks_upgrade_hint_pending on $fw_ver upgrade — user may not see KS re-enable prompt"
+    fi
 fi
 
 # Enable and start procd service (runs watchdog on every firmware version)
