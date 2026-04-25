@@ -285,11 +285,12 @@ Commercial licensing available for closed source use — contact [remotetohome.i
 
 | Model | Device | FW | OpenWrt | Firewall | Plugin | Tailscale |
 |-------|--------|----|--------|----------|--------|-----------|
-| GL-AXT1800 | Slate AX | 4.8.2 | 23.05 | fw4 | v1.0.18 | 1.80.3 / 1.94.2 |
-| GL-MT3000 | Beryl AX | 4.8.2β | 21.02 | fw3 | v1.0.18 | 1.80.3 / 1.94.2 |
+| GL-AXT1800 | Slate AX | 4.8.3 | 23.05 | fw4 | v1.0.19 ✓✓ | 1.80.3 / 1.96.4 |
+| GL-MT3000 | Beryl AX | 4.9.0 | 21.02-SNAPSHOT | fw3 | v1.0.19 ✓✓ | 1.92.5 / 1.96.4 |
+| GL-MT3000 | Beryl AX | 4.8.2 | 21.02 | fw3 | v1.0.18 | 1.80.3 / 1.94.2 |
 | GL-AX1800 | Flint | 4.6.8 | 21.02 | fw3 | v1.0.5 † | 1.66.4 |
 | GL-MT2500 | Brume 2 | 4.7.4 | 21.02 | fw3 | v1.0.5 † | 1.66.4 |
-| GL-MT6000 | Flint 2 | 4.8.4 | 21.02 | fw3 | v1.0.18 ‡ | — |
+| GL-MT6000 | Flint 2 | 4.8.4 | 21.02 | fw3 | v1.0.19 ⊕ | — |
 | GL-MT6000 | Flint 2 | 4.8.3 | 24 snapshot | fw4 | v1.0.18 ‡ | — |
 | GL-BE3600 | Slate 7 | 4.8.1 | 23.05 | fw4 | v1.0.5 † | 1.80.3 |
 | GL-BE6500 | Flint 3 | 4.8.4 | 23.05 | fw4 | v1.0.5 † | 1.92.5 |
@@ -298,15 +299,13 @@ Commercial licensing available for closed source use — contact [remotetohome.i
 | GL-XE3000 | Puli AX | 4.8.3 | 21.02 | fw3 | v1.0.18 ✓ | 1.80.3 / 1.96.3 |
 | GL-A1300 | Slate Plus | 4.5.22 / 4.7.2β | — | fw3 | v1.0.18 §  | 1.6x |
 
-**†** Install/remove verified only (Tailscale not connected — feature testing pending).
-**‡** Community-verified: install/remove, UI injection, kill switch, guest routing ([#1](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/1)).
-**¶** Install + version manager (update to 1.96.3) verified.
-**✓** Full end-to-end verified: exit node server + client, kill switch, version manager (update to 1.96.3).
-**§** Plugin install verified on FW 4.5.22 and 4.7.2β. Exit node client + kill switch verified on 4.7.2β. Version manager not supported — Tailscale's own updater also fails on this model ([#6](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/6)).
+**†** Install/remove only.
+**‡** Community: install + kill switch + guest ([#1](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/1)).
+**¶** Install + version manager verified.
+**✓** Full e2e: exit node server + client, kill switch, version manager.
+**✓✓** Full e2e on v1.0.19, including 4.9.0 daemon-stopped leak-block test (zero leak).
+**⊕** Community install + functional confirmation ([forum](https://forum.gl-inet.com/t/enhanced-tailscale-for-gl-inet-routers-proper-ts-killswitch-one-click-exit-node/67565)).
+**§** Install on 4.5.22 + 4.7.2β; KS verified on 4.7.2β; version manager unsupported ([#6](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/6)).
 
-All features verified on AXT1800 and MT3000 with both factory (v1.80.3) and
-updated (v1.94.2) Tailscale binaries: exit node advertisement, Tailscale SSH,
-routing kill switch, guest network routing, version manager (update + restore),
-OOM prevention on 512MB models.
-All other models verified for install/remove lifecycle, nginx injection, RPC module
-loading, and UCI config management.
+AXT1800 and MT3000 verified end-to-end across factory and ts-tiny Tailscale binaries;
+other models verified for install lifecycle and UI injection.
