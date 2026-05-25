@@ -4,7 +4,7 @@ Plugin package that fixes and enhances the Tailscale integration on GL.iNet rout
 
 **[Setup Guide & User Documentation](https://remotetohome.io/gl-tailscale-fix)** — screenshots, step-by-step exit node setup, kill switch verification, DNS configuration, Tailscale admin console walkthrough.
 
-![Tailscale Enhanced controls](.github/images/tailscale-enhanced.webp)
+![Tailscale Enhanced controls](.github/images/gl-tailscale-fix-v1020.webp)
 
 ## Features
 
