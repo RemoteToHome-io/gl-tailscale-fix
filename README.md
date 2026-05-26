@@ -124,7 +124,11 @@ Drop-in scripts for common integration patterns live in the [`examples/`](exampl
 
 [`examples/gl-switch.d/tailscale.sh`](examples/gl-switch.d/tailscale.sh) toggles GL's native Tailscale and the plugin's Kill Switch together when you flip the physical side switch on supported GL.iNet routers.
 
-**Prerequisites**: Tailscale should already be configured and working in the GL admin UI before deploying this script — plugin installed, Tailscale bound to your account, at least one Custom Exit Node selected, and exit node + subnet routes approved in the [Tailscale admin console](https://login.tailscale.com/admin/machines). Any WireGuard, OpenVPN, or Tor client tunnel managed via the GL admin UI should be disabled before configuring the slider — competing VPN routing conflicts with Tailscale's exit-node path (details in [Architecture](#architecture)). See the [setup guide](https://remotetohome.io/gl-tailscale-fix#setup-guide) for the full walkthrough. The script header lists the full prerequisite checklist.
+**Prerequisites**: Tailscale should already be configured and working in the GL admin UI before deploying this script — plugin installed, Tailscale bound to your account, at least one Custom Exit Node selected, and exit node + subnet routes approved in the [Tailscale admin console](https://login.tailscale.com/admin/machines). See the [setup guide](https://remotetohome.io/gl-tailscale-fix#setup-guide) for the full walkthrough. The script header lists the full prerequisite checklist.
+
+**What the slider does on "on"**: The script first installs a temporary full-router lockdown (blackholes all LAN/guest forwarding) to eliminate any IP-leak window during the transition. It then defensively disables GL's stock WireGuard, OpenVPN, and Tor clients to prevent routing-priority conflicts that would otherwise leave Tailscale unable to actually route through the exit node (details in [Architecture](#architecture)). Once Tailscale is up and the plugin's kill switch is engaged per your script configuration, the lockdown releases and traffic flows through the exit node. Expect roughly 5–10 seconds of LAN traffic disruption during the transition.
+
+**Note on custom routing**: The defensive disable covers GL's stock VPN clients only. If you have third-party VPN apps, AmneziaWG, custom iptables rules, manually-installed wireguard-go, or any other non-GL-OEM routing on the router, disable that yourself before enabling the slider — the script can't auto-detect arbitrary user-installed routing.
 
 Install on the router:
 
