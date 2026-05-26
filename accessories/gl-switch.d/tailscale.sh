@@ -44,7 +44,7 @@
 #     Tailscale comes up, file an issue with the firmware version + router model.
 #
 # Install on the router:
-#   wget -q https://raw.githubusercontent.com/RemoteToHome-io/gl-tailscale-fix/main/examples/gl-switch.d/tailscale.sh -O /etc/gl-switch.d/tailscale.sh
+#   wget -q https://raw.githubusercontent.com/RemoteToHome-io/gl-tailscale-fix/main/accessories/gl-switch.d/tailscale.sh -O /etc/gl-switch.d/tailscale.sh
 #   chmod +x /etc/gl-switch.d/tailscale.sh
 #
 # Bind the physical slider to this script. The GL admin UI dropdown for Toggle Button

@@ -116,13 +116,13 @@ The plugin survives GL.iNet firmware upgrades automatically on both minor (4.8.x
 
 On **firmware 4.9+**, the plugin detects the newer firmware and adapts its UI: the Advertise as Exit Node toggle is hidden (GL provides this natively via "Run Exit Node"), and an informational banner explains what the plugin continues to handle on top of GL's native Tailscale integration — Kill Switch, Guest routing through the exit node, Tailscale SSH toggle, and Version Manager. See the [blog post](https://remotetohome.io/blog/gl-tailscale-fix/) for the full rationale.
 
-## Examples
+## Accessories
 
-Drop-in scripts for common integration patterns live in the [`examples/`](examples/) directory.
+Companion scripts and sidecar utilities live in the [`accessories/`](accessories/) directory. These are full-featured add-ons (not illustrative snippets) that customers can deploy as-is on their routers.
 
 ### Side switch toggle (physical switch on Beryl AX, Slate AX, etc.)
 
-[`examples/gl-switch.d/tailscale.sh`](examples/gl-switch.d/tailscale.sh) toggles GL's native Tailscale and the plugin's Kill Switch together when you flip the physical side switch on supported GL.iNet routers.
+[`accessories/gl-switch.d/tailscale.sh`](accessories/gl-switch.d/tailscale.sh) toggles GL's native Tailscale and the plugin's Kill Switch together when you flip the physical side switch on supported GL.iNet routers.
 
 **Prerequisites**: Tailscale should already be configured and working in the GL admin UI before deploying this script — plugin installed, Tailscale bound to your account, at least one Custom Exit Node selected, and exit node + subnet routes approved in the [Tailscale admin console](https://login.tailscale.com/admin/machines). See the [setup guide](https://remotetohome.io/gl-tailscale-fix#setup-guide) for the full walkthrough. The script header lists the full prerequisite checklist.
 
@@ -133,7 +133,7 @@ Drop-in scripts for common integration patterns live in the [`examples/`](exampl
 Install on the router:
 
 ```sh
-wget -q https://raw.githubusercontent.com/RemoteToHome-io/gl-tailscale-fix/main/examples/gl-switch.d/tailscale.sh -O /etc/gl-switch.d/tailscale.sh
+wget -q https://raw.githubusercontent.com/RemoteToHome-io/gl-tailscale-fix/main/accessories/gl-switch.d/tailscale.sh -O /etc/gl-switch.d/tailscale.sh
 chmod +x /etc/gl-switch.d/tailscale.sh
 ```
 
