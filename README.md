@@ -116,6 +116,21 @@ The plugin survives GL.iNet firmware upgrades automatically on both minor (4.8.x
 
 On **firmware 4.9+**, the plugin detects the newer firmware and adapts its UI: the Advertise as Exit Node toggle is hidden (GL provides this natively via "Run Exit Node"), and an informational banner explains what the plugin continues to handle on top of GL's native Tailscale integration — Kill Switch, Guest routing through the exit node, Tailscale SSH toggle, and Version Manager. See the [blog post](https://remotetohome.io/blog/gl-tailscale-fix/) for the full rationale.
 
+## Examples
+
+Drop-in scripts for common integration patterns live in the [`examples/`](examples/) directory.
+
+### Side switch toggle (physical switch on Beryl AX, Slate AX, etc.)
+
+[`examples/gl-switch.d/Tailscale.sh`](examples/gl-switch.d/Tailscale.sh) toggles GL's native Tailscale and the plugin's Kill Switch together when you flip the physical side switch on supported GL.iNet routers. Install on the router:
+
+```sh
+wget -q https://raw.githubusercontent.com/RemoteToHome-io/gl-tailscale-fix/main/examples/gl-switch.d/Tailscale.sh -O /etc/gl-switch.d/Tailscale.sh
+chmod +x /etc/gl-switch.d/Tailscale.sh
+```
+
+Then edit the file on the router to set your exit node IP and preferred LAN/WAN access settings. The script handles the enable case explicitly and lets the plugin's watchdog tear down the kill switch automatically when Tailscale is disabled — see comments in the file for the rationale and for instructions on inverting the switch logic if you prefer.
+
 ## Compatibility
 
 **Should work** on any GL.iNet router with native Tailscale support running firmware 4.x (tested on 4.5.22 through 4.9.0). Both fw3 (iptables) and fw4 (nftables) are supported — the kill switch uses kernel routing (not firewall-specific), guest forwardings use GL's UCI abstraction layer.
