@@ -116,6 +116,20 @@ The plugin survives GL.iNet firmware upgrades automatically on both minor (4.8.x
 
 On **firmware 4.9+**, the plugin detects the newer firmware and adapts its UI: the Advertise as Exit Node toggle is hidden (GL provides this natively via "Run Exit Node"), and an informational banner explains what the plugin continues to handle on top of GL's native Tailscale integration — Kill Switch, Guest routing through the exit node, Tailscale SSH toggle, and Version Manager. See the [blog post](https://remotetohome.io/blog/gl-tailscale-fix/) for the full rationale.
 
+## Compatibility
+
+**Should work** on any GL.iNet router with native Tailscale support running firmware 4.x (tested on 4.5.22 through 4.9.0). Both fw3 (iptables) and fw4 (nftables) are supported — the kill switch uses kernel routing (not firewall-specific), guest forwardings use GL's UCI abstraction layer.
+
+Starting with **v1.0.19** the plugin coexists with firmware 4.9's native Tailscale enhancements. On 4.9+ the plugin auto-detects the firmware, hides UI for features GL now provides natively (Advertise as Exit Node, WAN subnet advertisement, IP Masquerading), and keeps its own features active — most importantly the daemon-independent kernel-level Kill Switch, which survives `tailscaled` crashes that Tailscale's built-in kill switch cannot. See the [blog post](https://remotetohome.io/blog/gl-tailscale-fix/) for the kill-switch rationale.
+
+Starting with **v1.0.20** the kill switch and the tailscale0 masquerade fixes apply to IPv6 as well as IPv4. On firmware 4.9+ the plugin no longer overrides GL's masquerade settings — if you have both **IP Masquerading** and **Allow Remote Access LAN** turned off on the Tailscale page, GL may leave the tailscale0 zone without IPv6 masquerade, in which case LAN-side IPv6 will not traverse the exit-node tunnel. Enable either setting and IPv6 works. The kill switch still protects on 4.9 regardless of masquerade state.
+
+See the [tested models](#tested-models) appendix for the full compatibility matrix.
+
+## Disclaimer
+
+**No warranty**.  The GL.iNet Tailscale implementation is Beta software and subject to change without notice (including for us).  While we have put extensive effort into testing, this functionality should also be considered beta and we cannot anticipate how future GL firmware changes may impact functionality of this plugin.  We recommend checking here for the latest plugin release before upgrading your GL firmware.  **Use at your own risk** and refer to the testing methodology in our [User Documentation](https://remotetohome.io/gl-tailscale-fix) to personally verify your privacy posture before using in production.
+
 ## Accessories
 
 Companion scripts and sidecar utilities live in the [`accessories/`](accessories/) directory. These are add-on functionality that customers can deploy on their gl-tailscale-fix enhanced routers.
@@ -147,20 +161,6 @@ uci commit switch-button
 This replaces any prior side-switch binding. **Do not open System → Toggle Button Settings in the GL admin UI after this** — that page only knows about its hardcoded function list, so it will display "No Function" (or a stale prior selection) and clicking Apply would overwrite the UCI binding. To unbind cleanly, run `uci set switch-button.@main[0].func='' && uci commit switch-button` from SSH.
 
 Then edit the Configuration block at the top of the file to dial in your preferred posture (LAN/WAN access, kill switch, guest routing, etc.). Every "on" flip applies that posture in full and defensively disables any active WireGuard, OpenVPN, or Tor client. See comments in the file for the rationale on each setting and for instructions on inverting the switch logic if you prefer.
-
-## Compatibility
-
-**Should work** on any GL.iNet router with native Tailscale support running firmware 4.x (tested on 4.5.22 through 4.9.0). Both fw3 (iptables) and fw4 (nftables) are supported — the kill switch uses kernel routing (not firewall-specific), guest forwardings use GL's UCI abstraction layer.
-
-Starting with **v1.0.19** the plugin coexists with firmware 4.9's native Tailscale enhancements. On 4.9+ the plugin auto-detects the firmware, hides UI for features GL now provides natively (Advertise as Exit Node, WAN subnet advertisement, IP Masquerading), and keeps its own features active — most importantly the daemon-independent kernel-level Kill Switch, which survives `tailscaled` crashes that Tailscale's built-in kill switch cannot. See the [blog post](https://remotetohome.io/blog/gl-tailscale-fix/) for the kill-switch rationale.
-
-Starting with **v1.0.20** the kill switch and the tailscale0 masquerade fixes apply to IPv6 as well as IPv4. On firmware 4.9+ the plugin no longer overrides GL's masquerade settings — if you have both **IP Masquerading** and **Allow Remote Access LAN** turned off on the Tailscale page, GL may leave the tailscale0 zone without IPv6 masquerade, in which case LAN-side IPv6 will not traverse the exit-node tunnel. Enable either setting and IPv6 works. The kill switch still protects on 4.9 regardless of masquerade state.
-
-See the [tested models](#tested-models) appendix for the full compatibility matrix.
-
-## Disclaimer
-
-**No warranty**.  The GL.iNet Tailscale implementation is Beta software and subject to change without notice (including for us).  While we have put extensive effort into testing, this functionality should also be considered beta and we cannot anticipate how future GL firmware changes may impact functionality of this plugin.  We recommend checking here for the latest plugin release before upgrading your GL firmware.  **Use at your own risk** and refer to the testing methodology in our [User Documentation](https://remotetohome.io/gl-tailscale-fix) to personally verify your privacy posture before using in production.
 
 ## Contributing
 
