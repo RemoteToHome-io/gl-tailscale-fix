@@ -202,7 +202,7 @@ Commercial licensing available for closed source use — contact [remotetohome.i
 | GL-MT3600BE | Beryl 7 | 4.8.5 | 21.02 | fw3 | v1.0.18 ‡¶ | 1.94.2 |
 | GL-XE3000 | Puli AX | 4.8.3 | 21.02 | fw3 | v1.0.18 ✓ | 1.80.3 / 1.96.3 |
 | GL-A1300 | Slate Plus | 4.5.22 / 4.7.2β | — | fw3 | v1.0.18 §  | 1.6x |
-| GL-E5800 | Mudi 7 | 4.8.4 | 23.05.4 (5.15-kernel) | fw4 | v1.0.20 ✓✓✓ | 1.80.3 / 1.98.5 |
+| GL-E5800 | Mudi 7 | 4.8.5 | 23.05.4 (5.15-kernel) | fw4 | v1.0.20 ✓✓✓ | 1.80.3 / 1.98.5 |
 
 **†** Install/remove only.
 **‡** Community: install + kill switch + guest ([#1](https://github.com/RemoteToHome-io/gl-tailscale-fix/issues/1)).
