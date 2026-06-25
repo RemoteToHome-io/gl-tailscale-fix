@@ -828,19 +828,23 @@ function applyPendingChanges() {
   if (keys.length === 0) return;
 
   var params = {};
-  keys.forEach(function(k) { params[k] = pendingChanges[k]; });
+  var prevValues = {};
+  keys.forEach(function(k) {
+    prevValues[k] = state[k];
+    params[k] = pendingChanges[k];
+  });
   pendingChanges = {};
 
   rpc('ts-fix', 'set_config', params).then(function(res) {
     if (res.err_code) {
       // Revert on error
-      keys.forEach(function(k) { state[k] = !params[k]; });
+      keys.forEach(function(k) { state[k] = prevValues[k]; });
       refreshUI();
       return;
     }
     setTimeout(fetchConfig, 500);
   }).catch(function() {
-    keys.forEach(function(k) { state[k] = !params[k]; });
+    keys.forEach(function(k) { state[k] = prevValues[k]; });
     refreshUI();
   });
 }
