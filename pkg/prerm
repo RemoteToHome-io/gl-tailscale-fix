@@ -41,8 +41,10 @@ fi
 pgrep tailscaled >/dev/null 2>&1 && \
     /usr/sbin/tailscale set --advertise-exit-node=false --ssh=false 2>/dev/null
 
-# Remove kill switch routing rules (both address families)
+# Remove kill switch routing rules (both families) — 5279 current + 5280 legacy
 for fam in -4 -6; do
+    ip $fam rule del iif br-lan priority 5279 lookup 100 2>/dev/null
+    ip $fam rule del iif br-guest priority 5279 lookup 100 2>/dev/null
     ip $fam rule del iif br-lan priority 5280 lookup 100 2>/dev/null
     ip $fam rule del iif br-guest priority 5280 lookup 100 2>/dev/null
     ip $fam route del unreachable default table 100 2>/dev/null
@@ -57,12 +59,12 @@ for section in ts_fix_guest2ts ts_fix_ts2guest ts_ks_lan2wan ts_ks_guest2wan; do
     uci -q delete firewall."$section" 2>/dev/null
 done
 
-# Remove tailscale0 zone masq/masq6 — only on pre-4.9 where we set them.
-# On 4.9+, GL owns the IP Masquerading toggle natively and may have set
-# them itself; deleting would trample GL's state.
+# Remove tailscale0 zone masquerade. masq6 (IPv6) is plugin-owned on ALL
+# firmware (GL never sets it), so always remove it. masq (IPv4) is GL's on
+# 4.9+, so only remove it pre-4.9 (deleting on 4.9 would trample GL's state).
+uci -q delete firewall.tailscale0.masq6 2>/dev/null
 if ! is_fw49_plus; then
     uci -q delete firewall.tailscale0.masq 2>/dev/null
-    uci -q delete firewall.tailscale0.masq6 2>/dev/null
 fi
 
 # If we set wan.masq6 for exit-node-server (sidecar flag), undo it by

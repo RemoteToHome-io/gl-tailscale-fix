@@ -258,7 +258,7 @@ function initTooltip() {
 
 var TIPS = {
   exitNode: 'Advertise this router as a Tailscale exit node so remote devices can route all traffic through it. Requires "Allow Remote Access WAN" to be enabled above.',
-  killSwitch: 'Routing-level kill switch - Uses policy routing to block all LAN/Guest traffic from reaching the WAN directly when Custom Exit Node routing is active and the tunnel connection is interrupted (e.g. an exit node drop). Persists even if tailscaled crashes or fails to start.',
+  killSwitch: 'Routing-level kill switch - Uses policy routing to block all LAN/Guest traffic from reaching the WAN directly whenever it is enabled, so your real IP cannot leak if the exit-node tunnel drops, tailscaled crashes, or the daemon restarts. Stays armed until you turn it off or disable Tailscale - removing the exit node does NOT disable it (traffic stays blocked, fail-secure).',
   routeGuest: 'Extends GL\'s "Allow Remote Access" to the Guest network. Adds Guest\u2194Tailscale forwardings and advertises the guest subnet to your tailnet.',
   tailscaleSsh: 'Enable Tailscale\'s ACL-based SSH authentication for this router. Most users don\'t need this \u2014 SSH to the router\'s Tailscale IP already works through the normal SSH daemon (Dropbear) without any extra setup. Enable this only if you specifically want identity-based access controlled by a Tailscale SSH ACL rule (Access Controls \u2192 Tailscale SSH tab). While enabled, tailscaled takes over port 22 for tailnet-origin traffic, which breaks SSH from LAN clients that reach the router via Tailscale subnet routing. In that case, run Dropbear on an alternate port (System \u2192 Administration \u2192 SSH Access) to keep a path open for both Tailscale and LAN clients.',
   version: 'Manage Tailscale binary version. Combined binaries provided by admonstrator/glinet-tailscale-updater.'
@@ -444,8 +444,11 @@ function refreshUI() {
   showRow('exit-node', state.ts_enabled && !state.firmware_49_plus);
   showRow('route-guest', state.ts_enabled);
   showRow('tailscale-ssh', state.ts_enabled);
-  // Show kill switch when exit node is configured (backend) OR toggled on in GL UI (pre-Apply)
-  showRow('kill-switch', state.ts_enabled && (state.exit_node_ip !== '' || isGlExitNodeEnabled()));
+  // Show kill switch when it's already on (so an armed KS is ALWAYS reversible —
+  // design C keeps it armed even with no exit node, so the toggle must stay
+  // reachable or the user could be stranded), when an exit node is configured
+  // (backend), or when toggled on in GL's UI (pre-Apply).
+  showRow('kill-switch', state.ts_enabled && (state.kill_switch || state.exit_node_ip !== '' || isGlExitNodeEnabled()));
 
   // Post-upgrade KS re-enable hint on 4.9+ (evaluated after row visibility)
   ensureMigrationHint();
@@ -917,10 +920,9 @@ function reapplyAfterGlRestart() {
     var needReapply = false;
 
     // Only reapply tailscale-level settings that "tailscale up --reset" clears.
-    // Kill switch uses kernel ip rules/routes which survive the restart — no
-    // reapply needed. Reapplying KS here would race with ts-fix-reapply's
-    // auto-disable (exit_node_ip empty → kill_switch=0) and overwrite it.
-    // On 4.9+, skip advertise_exit_node — GL manages it natively.
+    // Kill switch uses kernel ip rules/routes which survive the restart and are
+    // maintained by ts-fix-reapply on the user's intent alone — no reapply
+    // needed here. On 4.9+, skip advertise_exit_node — GL manages it natively.
     if (state.advertise_exit_node && !state.firmware_49_plus) {
       params.advertise_exit_node = true;
       needReapply = true;

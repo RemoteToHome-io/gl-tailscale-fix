@@ -199,22 +199,27 @@ end
 -- reinitialize after daemon restart on fw3 kernels).
 -- Returns true when the desired state is reached (either already set, or
 -- we set it successfully). Logs and returns false on unrecoverable errors.
-local function ensure_masquerade()
+local function ensure_masquerade(is_49_plus)
     local c = uci.cursor()
     if not c:get(FW_CONFIG, "tailscale0") then
         ngx.log(ngx.WARN, "ts-fix: tailscale0 firewall zone not found — masquerade not configured")
         return false
     end
-    -- Both IPv4 (masq) and IPv6 (masq6) masquerade are set on the tailscale0
-    -- zone. Verified empirically: without masq6, forwarded LAN IPv6 fails to
-    -- traverse the exit-node tunnel. masq6 provides the IPv6 SNAT, mirroring
-    -- masq's defense-in-depth role for IPv4.
-    if c:get(FW_CONFIG, "tailscale0", "masq") == "1"
-       and c:get(FW_CONFIG, "tailscale0", "masq6") == "1" then
-        return true  -- both already set
+    -- masq6 (IPv6) is set on ALL firmware: GL never sets tailscale0.masq6 (its
+    -- "IP Masquerading" toggle is IPv4-only — verified, no masq6 in
+    -- /etc/firewall.tailscale.sh), and without it forwarded LAN IPv6 can't
+    -- traverse the exit-node tunnel. masq (IPv4) is GL's on 4.9+, so the plugin
+    -- sets it only pre-4.9 (defense-in-depth) and defers to GL otherwise.
+    local want_masq = not is_49_plus
+    local masq6_ok = c:get(FW_CONFIG, "tailscale0", "masq6") == "1"
+    local masq_ok = (not want_masq) or c:get(FW_CONFIG, "tailscale0", "masq") == "1"
+    if masq6_ok and masq_ok then
+        return true  -- nothing to change
     end
-    local ok = c:set(FW_CONFIG, "tailscale0", "masq", "1")
-    ok = c:set(FW_CONFIG, "tailscale0", "masq6", "1") and ok
+    local ok = c:set(FW_CONFIG, "tailscale0", "masq6", "1")
+    if want_masq then
+        ok = c:set(FW_CONFIG, "tailscale0", "masq", "1") and ok
+    end
     if not ok then
         ngx.log(ngx.ERR, "ts-fix: failed to set firewall.tailscale0 masquerade")
         return false
@@ -305,7 +310,7 @@ end
 -- at priority 0: "from <guest_subnet> lookup main". This catches ALL traffic
 -- originating from guest clients and sends it to the main table → WAN,
 -- completely bypassing the exit node (priority 5270) AND the kill switch
--- (priority 5280). Replace with a destination-based rule: "to <guest_subnet>
+-- (priority 5279). Replace with a destination-based rule: "to <guest_subnet>
 -- table main" (matching Tailscale's own treatment of the LAN subnet). This
 -- preserves inbound tailnet→guest reachability while letting guest clients
 -- use the exit node. Confirmed by GL engineer prototype (gl_tailscale-guest).
@@ -324,7 +329,10 @@ end
 
 -- Helper: set kill switch routing rules (ip rule + ip route), both families.
 -- Uses policy routing instead of firewall rules to block before conntrack.
--- Table 100 = unreachable default, priority 5280 = after Tailscale's 5270.
+-- Table 100 = unreachable default, priority 5279 = after Tailscale's 5270 and
+-- ahead of GL 4.9's ts_killswitch blackhole at 5280 (off 5280 = no collision).
+-- GL's is IPv4-only + br-lan-only, so it backstops nothing for IPv6/guest —
+-- ours at 5279 is the only complete kill switch.
 -- Applied to IPv4 and IPv6. "ip -6" errors are suppressed: if IPv6 is
 -- compiled out the calls fail; if IPv6 is merely disabled the rules install
 -- inert (no IPv6 traffic to act on). Neither case is harmful.
@@ -336,16 +344,24 @@ local function set_killswitch_route(enabled)
             if not rt:match("unreachable default") then
                 exec("ip " .. fam .. " route add unreachable default table 100 2>/dev/null")
             end
-            -- Add ip rules for br-lan and br-guest (idempotent)
-            local rules = exec("ip " .. fam .. " rule list priority 5280 2>/dev/null") or ""
-            if not rules:match("iif br%-lan") then
-                exec("ip " .. fam .. " rule add iif br-lan priority 5280 lookup 100 2>/dev/null")
+            -- Add ip rules for br-lan and br-guest at priority 5279 (idempotent).
+            -- Exact match (interface AND "lookup 100") — a bare "iif br-lan" match
+            -- would also match GL 4.9's "iif br-lan blackhole" and skip our install.
+            local rules = exec("ip " .. fam .. " rule list priority 5279 2>/dev/null") or ""
+            if not rules:match("iif br%-lan lookup 100") then
+                exec("ip " .. fam .. " rule add iif br-lan priority 5279 lookup 100 2>/dev/null")
             end
-            if not rules:match("iif br%-guest") then
-                exec("ip " .. fam .. " rule add iif br-guest priority 5280 lookup 100 2>/dev/null")
+            if not rules:match("iif br%-guest lookup 100") then
+                exec("ip " .. fam .. " rule add iif br-guest priority 5279 lookup 100 2>/dev/null")
             end
+            -- Migration: with 5279 up, drop any legacy priority-5280 rule from a
+            -- pre-5279 install (only our exact lookup-100 rules; GL's 5280 stays).
+            exec("ip " .. fam .. " rule del iif br-lan priority 5280 lookup 100 2>/dev/null")
+            exec("ip " .. fam .. " rule del iif br-guest priority 5280 lookup 100 2>/dev/null")
         else
-            -- Remove ip rules and route (suppress errors if not present)
+            -- Remove our ip rules (5279 current + 5280 legacy) and the route.
+            exec("ip " .. fam .. " rule del iif br-lan priority 5279 lookup 100 2>/dev/null")
+            exec("ip " .. fam .. " rule del iif br-guest priority 5279 lookup 100 2>/dev/null")
             exec("ip " .. fam .. " rule del iif br-lan priority 5280 lookup 100 2>/dev/null")
             exec("ip " .. fam .. " rule del iif br-guest priority 5280 lookup 100 2>/dev/null")
             exec("ip " .. fam .. " route del unreachable default table 100 2>/dev/null")
@@ -392,13 +408,9 @@ local firmware_version, fw_is_49_plus = detect_firmware()
 function M.get_config()
     -- Ensure masquerade on every config read (covers first page visit after
     -- install, even if no ts-fix features are active — needed for LAN clients
-    -- to reach Tailscale peers through subnet routing). On 4.9+, GL owns the
-    -- IP Masquerading toggle natively (under NAT on the Tailscale page) —
-    -- defer entirely to avoid fighting the UI in the narrow edge case where
-    -- the user has both LAN access and the masq toggle off.
-    if not fw_is_49_plus then
-        ensure_masquerade()
-    end
+    -- to reach Tailscale peers / the exit node). Sets IPv6 masq6 on all
+    -- firmware (GL never does) and IPv4 masq only pre-4.9 — see ensure_masquerade.
+    ensure_masquerade(fw_is_49_plus)
 
     local c = uci.cursor()
     local res = {}
@@ -452,8 +464,8 @@ function M.get_config()
     -- Reported active only when BOTH families' rules are present; a torn
     -- state (one family only, e.g. a partial reapply) reports false so the
     -- UI prompts a re-apply rather than silently claiming full protection.
-    local ks_v4 = (exec("ip -4 rule list priority 5280 2>/dev/null") or ""):match("lookup 100") ~= nil
-    local ks_v6 = (exec("ip -6 rule list priority 5280 2>/dev/null") or ""):match("lookup 100") ~= nil
+    local ks_v4 = (exec("ip -4 rule list priority 5279 2>/dev/null") or ""):match("lookup 100") ~= nil
+    local ks_v6 = (exec("ip -6 rule list priority 5279 2>/dev/null") or ""):match("lookup 100") ~= nil
     res.kill_switch_fw_active = ks_v4 and ks_v6
 
     -- Guest routing firewall forwarding state
@@ -568,11 +580,9 @@ function M.set_config(params)
         fix_guest_policy_route(rg)
     end
 
-    -- Ensure tailscale0 zone masquerade (defense-in-depth for subnet routing).
-    -- On 4.9+, GL owns this — defer (see comment in get_config).
-    if not fw_is_49_plus then
-        ensure_masquerade()
-    end
+    -- Ensure tailscale0 zone masquerade (defense-in-depth for subnet routing +
+    -- IPv6 through the exit node). masq6 on all firmware, IPv4 masq pre-4.9.
+    ensure_masquerade(fw_is_49_plus)
 
     return {}
 end

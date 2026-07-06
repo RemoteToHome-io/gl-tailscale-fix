@@ -5,10 +5,10 @@
 #
 # Leak protection: at the start of each "on" flip, the script installs a temporary
 # blackhole at ip-rule priority 5260 (above Tailscale's exit-node routing at 5270 and
-# the plugin's normal kill switch at 5280). This blocks all LAN/guest forwarding for
+# the plugin's normal kill switch at 5279). This blocks all LAN/guest forwarding for
 # the duration of the transition — between competing-VPN teardown and Tailscale being
 # fully up — eliminating the IP-leak window that would otherwise exist. The lockdown
-# is released only after the plugin's 5280 KS is confirmed in place. On abnormal exit,
+# is released only after the plugin's 5279 KS is confirmed in place. On abnormal exit,
 # the lockdown stays (fail-secure: LAN blackout instead of leak). The "off" path also
 # cleans up any lingering lockdown rules from an interrupted prior "on".
 #
@@ -117,12 +117,17 @@ lockdown_remove() {
         ip $fam rule del iif br-guest priority 5260 lookup 100 2>/dev/null
     done
     # Note: table 100 unreachable-default route is left in place — the plugin's
-    # 5280 kill switch uses the same table when engaged.
+    # 5279 kill switch uses the same table when engaged.
 }
 
-ks_at_5280_present() {
-    ip -4 rule list priority 5280 2>/dev/null | grep -q "lookup 100" && \
-    ip -6 rule list priority 5280 2>/dev/null | grep -q "lookup 100"
+ks_at_5279_present() {
+    # IPv4 is always required. IPv6 is required only where v6 rules can exist: on an
+    # IPv4-only router `ip -6 rule list` is empty, so demanding a v6 rule would mean the
+    # release gate below could never pass and the 5260 lockdown would hold forever
+    # (permanent LAN blackout on every "on" flip). Mirrors the plugin watchdog's gate.
+    ip -4 rule list priority 5279 2>/dev/null | grep -q "lookup 100" || return 1
+    [ -n "$(ip -6 rule list 2>/dev/null)" ] || return 0
+    ip -6 rule list priority 5279 2>/dev/null | grep -q "lookup 100"
 }
 
 # --- Logic ---
@@ -135,7 +140,7 @@ RPC="http://127.0.0.1:$PORT/rpc"
 
 if [ "$action" = "on" ]; then
     # STEP 1: Pre-emptive lockdown. LAN/guest forwarding now blackholed at priority 5260
-    # (above TS exit-node routing at 5270 and plugin's 5280 KS). No traffic can leak
+    # (above TS exit-node routing at 5270 and plugin's 5279 KS). No traffic can leak
     # during the transition that follows.
     lockdown_install
 
@@ -167,14 +172,14 @@ if [ "$action" = "on" ]; then
     # STEP 5: Apply gl-tailscale-fix posture in lock-step with Tailscale.
     curl -H 'glinet: 1' -s -k "$RPC" -d "{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"params\":[\"\",\"ts-fix\",\"set_config\",{\"kill_switch\":$KILL_SWITCH,\"route_guest\":$ROUTE_GUEST,\"advertise_exit_node\":$ADVERTISE_EXIT_NODE,\"tailscale_ssh\":$TAILSCALE_SSH}],\"id\":2}"
 
-    # STEP 6: Release the lockdown only when the plugin's 5280 KS is confirmed in place
+    # STEP 6: Release the lockdown only when the plugin's 5279 KS is confirmed in place
     # (when KILL_SWITCH=true) or when the user has explicitly opted out of KS. If
-    # KILL_SWITCH=true but the 5280 rules aren't present, keep the lockdown — something
+    # KILL_SWITCH=true but the 5279 rules aren't present, keep the lockdown — something
     # went wrong with set_config and we'd rather fail-secure (LAN blackout) than risk a
     # leak. SSH in and run `lockdown_remove` from this script manually, or clear via
     # `ip rule del iif br-lan priority 5260 lookup 100` (etc) to recover.
     if [ "$KILL_SWITCH" = "true" ]; then
-        if ks_at_5280_present; then
+        if ks_at_5279_present; then
             lockdown_remove
         fi
         # else: keep lockdown in place — fail-secure

@@ -1,11 +1,16 @@
 #!/bin/sh
 # gl-tailscale-fix: Watchdog for Tailscale state changes
-# Polls every 5 seconds. Detects:
-# 1. Tailscale disabled → full teardown (all ts-fix state removed)
-# 2. Exit node removed while kill switch active → auto-disable KS
-# This is necessary because procd_add_reload_trigger does NOT work on GL
-# firmware (uci commit does not emit config.change events), and GL's admin
-# panel does not notify ts-fix when it changes exit node settings.
+# Polls every 5 seconds. (1) Detects Tailscale disabled while our kill-switch
+# rules are still installed → runs teardown. (2) Ensures the KS is re-asserted if
+# it is armed (kill_switch=1 + TS enabled) but the rule is missing — a boot/clobber
+# backstop. Necessary because
+# procd_add_reload_trigger does NOT work on GL firmware (uci commit does not
+# emit config.change events), so nothing else notifies ts-fix when Tailscale is
+# turned off.
+#
+# Design C: the kill switch is NOT torn down on exit-node removal — only on a
+# Tailscale disable (here) or the user turning the KS toggle off (RPC/reapply).
+# It stays armed through restart transients, fail-secure (block, never leak).
 # Copyright (c) 2026 RemoteToHome Consulting (https://remotetohome.io)
 # https://github.com/RemoteToHome-io/gl-tailscale-fix
 
@@ -21,42 +26,38 @@ while true; do
     sleep 5
     curr=$(uci -q get tailscale.settings.enabled)
 
-    # Detect Tailscale disabled + KS rules still installed → run teardown.
-    # Idempotent: keeps firing until teardown clears the KS rules (which
-    # reapply does on its first invocation; subsequent polls see no rules
-    # and no-op). Replaces the prior transition-based check.
-    if [ "$curr" != "1" ] && ip rule list 2>/dev/null | grep -q "5280.*lookup 100"; then
+    # Sample both families once per poll. "ip rule list" defaults to IPv4, so
+    # every check below is done per-family — a v6-only clobber is invisible to a
+    # v4-only probe, and IPv6 coverage is exactly our edge over GL's IPv4-only
+    # ts_killswitch. An empty $r6 means IPv6 is compiled out / disabled (no v6
+    # rules can exist), which the ensure check relies on to avoid looping.
+    r4=$(ip -4 rule list 2>/dev/null)
+    r6=$(ip -6 rule list 2>/dev/null)
+
+    # Detect Tailscale disabled + our KS rules still installed (EITHER family) →
+    # teardown. Idempotent: keeps firing until teardown clears the rules (reapply
+    # does on its first invocation; subsequent polls see none and no-op). Match our
+    # rule at 5279 (current) OR 5280 (legacy, pre-5279 install mid-upgrade); GL's
+    # "iif br-lan blackhole" at 5280 has no "lookup 100" so it never matches.
+    if [ "$curr" != "1" ] && { echo "$r4" | grep -qE "52(79|80).*lookup 100" || \
+                               echo "$r6" | grep -qE "52(79|80).*lookup 100"; }; then
         logger -t ts-fix "Tailscale disabled + KS rules present — running teardown"
         /usr/bin/ts-fix-reapply
     fi
 
-    # Detect exit node removed while kill switch active.
-    # GL does not notify us when Custom Exit Node is disabled — it clears
-    # the exit node in tailscale but leaves its own UCI stale. Without this
-    # check, KS routing rules blackhole all traffic indefinitely.
-    #
-    # Memory optimization: first check uses kernel routing queries (ip rule
-    # + ip route = zero RSS). Only spawns Go tailscale CLI processes (~10MB
-    # RSS each) when the light check detects a potential problem. This
-    # prevents OOM on 512MB routers where the previous approach spawned
-    # 2 Go processes every 5s poll cycle.
-    if [ "$curr" = "1" ]; then
-        ks=$(uci -q get ts-fix.settings.kill_switch)
-        if [ "$ks" = "1" ] && ip rule list priority 5280 2>/dev/null | grep -q "lookup 100"; then
-            # Light check: Tailscale's exit node uses table 52 with a default route.
-            # If table 52 has no default, exit node routing is gone.
-            if ! ip route show table 52 2>/dev/null | grep -q "default"; then
-                # Heavy check: confirm via tailscale prefs (authoritative)
-                exit_id=$(/usr/sbin/tailscale debug prefs 2>/dev/null | jsonfilter -e '@.ExitNodeID' 2>/dev/null)
-                if [ -z "$exit_id" ]; then
-                    # Confirm tailscale is Running (not mid-restart where prefs are transiently empty)
-                    state=$(/usr/sbin/tailscale status --json 2>/dev/null | jsonfilter -e '@.BackendState' 2>/dev/null)
-                    if [ "$state" = "Running" ]; then
-                        logger -t ts-fix "Exit node removed while kill switch active — auto-disabling"
-                        /usr/bin/ts-fix-reapply
-                    fi
-                fi
-            fi
+    # Ensure (boot-window + clobber backstop): KS armed (kill_switch=1) + TS enabled
+    # but our 5279 br-lan rule missing in a family that should have it → re-assert via
+    # reapply (which installs the KS at its top, before any daemon wait). Fail-secure:
+    # only ever ADDS the KS, never removes. br-lan is the per-family proxy (reapply
+    # does both interfaces + families). The v6 arm is gated on $r6 being non-empty so
+    # an IPv6-disabled router doesn't loop reapply chasing a rule that can't exist.
+    if [ "$curr" = "1" ] && [ "$(uci -q get ts-fix.settings.kill_switch)" = "1" ]; then
+        need=0
+        echo "$r4" | grep -q "5279:.*iif br-lan.*lookup 100" || need=1
+        [ -n "$r6" ] && { echo "$r6" | grep -q "5279:.*iif br-lan.*lookup 100" || need=1; }
+        if [ "$need" = "1" ]; then
+            logger -t ts-fix "KS armed but 5279 br-lan rule missing — re-asserting via reapply"
+            /usr/bin/ts-fix-reapply
         fi
     fi
 

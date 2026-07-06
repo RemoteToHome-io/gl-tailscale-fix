@@ -101,8 +101,12 @@ enabled=$(uci -q get tailscale.settings.enabled)
 # be cleaned up, and UCI settings reset to 0 so everything starts clean
 # when Tailscale is re-enabled.
 if [ "$enabled" != "1" ]; then
-    # Remove kill switch routing rules (both address families)
+    # Remove kill switch routing rules (both families). Install moved to priority
+    # 5279; also drop any legacy 5280 rules from a pre-5279 install (only our exact
+    # lookup-100 rules — GL 4.9's 5280 blackhole is left untouched).
     for fam in -4 -6; do
+        ip $fam rule del iif br-lan priority 5279 lookup 100 2>/dev/null
+        ip $fam rule del iif br-guest priority 5279 lookup 100 2>/dev/null
         ip $fam rule del iif br-lan priority 5280 lookup 100 2>/dev/null
         ip $fam rule del iif br-guest priority 5280 lookup 100 2>/dev/null
         ip $fam route del unreachable default table 100 2>/dev/null
@@ -140,15 +144,16 @@ if [ "$enabled" != "1" ]; then
         uci -q delete firewall.ts_fix_ts2guest
         _fw=1
     }
-    # On 4.9+, GL owns the IP Masquerading toggle — don't delete on teardown
-    # (would trample GL's state). On pre-4.9, plugin set them, plugin clears.
-    if ! is_fw49_plus; then
-        if [ "$(uci -q get firewall.tailscale0.masq)" = "1" ] || \
-           [ "$(uci -q get firewall.tailscale0.masq6)" = "1" ]; then
-            uci -q delete firewall.tailscale0.masq
-            uci -q delete firewall.tailscale0.masq6
-            _fw=1
-        fi
+    # masq6 (IPv6) is plugin-owned on ALL firmware (GL never sets it), so clear
+    # it here regardless of firmware. masq (IPv4) is GL's on 4.9+ — only clear
+    # it pre-4.9 (deleting on 4.9 would trample GL's state).
+    if [ "$(uci -q get firewall.tailscale0.masq6)" = "1" ]; then
+        uci -q delete firewall.tailscale0.masq6
+        _fw=1
+    fi
+    if ! is_fw49_plus && [ "$(uci -q get firewall.tailscale0.masq)" = "1" ]; then
+        uci -q delete firewall.tailscale0.masq
+        _fw=1
     fi
     [ "$_fw" = "1" ] && { uci commit firewall; /etc/init.d/firewall reload; }
 
@@ -174,20 +179,70 @@ LOCK="/tmp/ts-fix-reapply.lock"
 exec 200>"$LOCK"
 flock -n 200 || exit 0
 
-# Ensure tailscale0 zone masquerade BEFORE waiting for tailscaled — this is a
-# pure firewall setting that doesn't need the daemon. Required for LAN clients
-# to reach Tailscale peers through subnet routing (SNAT return path).
-# On 4.9+, GL owns the IP Masquerading toggle natively — defer to it (don't
-# fight the UI in the narrow edge case where the user has both LAN access
-# off and the masq toggle off).
-if ! is_fw49_plus && [ -n "$(uci -q get firewall.tailscale0)" ]; then
-    if [ "$(uci -q get firewall.tailscale0.masq)" != "1" ] || \
-       [ "$(uci -q get firewall.tailscale0.masq6)" != "1" ]; then
-        uci set firewall.tailscale0.masq=1
-        uci set firewall.tailscale0.masq6=1
-        uci commit firewall
-        /etc/init.d/firewall reload >/dev/null 2>&1
+# Kill switch (policy routing: ip rule priority 5279 -> table 100 unreachable
+# default). Priority 5279 sits just after Tailscale's exit-node rule (5270),
+# ahead of GL 4.9's own ts_killswitch (an iif-br-lan blackhole at 5280). GL's is
+# IPv4-only and br-lan-only, so it backstops nothing for IPv6 or guest — ours at
+# 5279 is the only complete kill switch. Moving off 5280 also ends the priority
+# collision and makes ours unambiguously authoritative.
+# Design C: the KS lifecycle is driven ONLY by the user's kill_switch
+# intent plus Tailscale being enabled (the enabled!=1 teardown above already
+# handles a user disable). It deliberately does NOT depend on exit-node state,
+# so it stays armed through every "tailscale up --reset" transient and is
+# unaffected by the daemon's transient or stale ExitNodeID — fail-secure: block,
+# never leak the real IP. Applied HERE, before the daemon waits below, so the
+# rules come up immediately at boot even if tailscaled is slow to start or never
+# reaches Running. Only a kill_switch=0 toggle or a Tailscale disable removes it.
+kill_switch=$(uci -q get ts-fix.settings.kill_switch)
+if [ "$kill_switch" = "1" ]; then
+    # "ip -6" errors are suppressed — harmless if IPv6 is compiled out (calls
+    # fail) or merely disabled (rules install inert).
+    # Exact-rule grep ("iif br-lan " AND "lookup 100"): a bare "iif br-lan" match
+    # would also match a stray "iif br-lan blackhole" (GL's 5280) and wrongly skip
+    # our install — the v1.0.21 loose-grep bug. Moot at 5279, kept exact as
+    # defense-in-depth.
+    for fam in -4 -6; do
+        ip $fam route show table 100 2>/dev/null | grep -q "unreachable default" || \
+            ip $fam route add unreachable default table 100 2>/dev/null
+        ip $fam rule list priority 5279 2>/dev/null | grep "iif br-lan " | grep -q "lookup 100" || \
+            ip $fam rule add iif br-lan priority 5279 lookup 100 2>/dev/null
+        ip $fam rule list priority 5279 2>/dev/null | grep "iif br-guest " | grep -q "lookup 100" || \
+            ip $fam rule add iif br-guest priority 5279 lookup 100 2>/dev/null
+        # Migration: with 5279 now up (no gap), drop any legacy priority-5280 rule
+        # from a pre-5279 install. Only our exact lookup-100 rules — GL's 5280
+        # blackhole stays.
+        ip $fam rule del iif br-lan priority 5280 lookup 100 2>/dev/null
+        ip $fam rule del iif br-guest priority 5280 lookup 100 2>/dev/null
+    done
+else
+    for fam in -4 -6; do
+        ip $fam rule del iif br-lan priority 5279 lookup 100 2>/dev/null
+        ip $fam rule del iif br-guest priority 5279 lookup 100 2>/dev/null
+        ip $fam rule del iif br-lan priority 5280 lookup 100 2>/dev/null
+        ip $fam rule del iif br-guest priority 5280 lookup 100 2>/dev/null
+        ip $fam route del unreachable default table 100 2>/dev/null
+    done
+fi
+
+# Ensure tailscale0 zone masquerade BEFORE waiting for tailscaled — a pure
+# firewall setting that doesn't need the daemon. Required for LAN clients to
+# reach Tailscale peers / the exit node (SNAT return path).
+#   IPv4 (masq):  GL owns it on 4.9+ (its "IP Masquerading" toggle sets masq),
+#                 so we set it only pre-4.9 to avoid fighting the UI.
+#   IPv6 (masq6): GL NEVER sets tailscale0.masq6 on ANY firmware — its toggle
+#                 is IPv4-only (verified: no masq6 in /etc/firewall.tailscale.sh).
+#                 Without masq6, forwarded LAN IPv6 can't traverse the exit-node
+#                 tunnel, so the plugin sets it on all firmware — no GL state to
+#                 defer to.
+if [ -n "$(uci -q get firewall.tailscale0)" ]; then
+    _fwchg=0
+    if [ "$(uci -q get firewall.tailscale0.masq6)" != "1" ]; then
+        uci set firewall.tailscale0.masq6=1; _fwchg=1
     fi
+    if ! is_fw49_plus && [ "$(uci -q get firewall.tailscale0.masq)" != "1" ]; then
+        uci set firewall.tailscale0.masq=1; _fwchg=1
+    fi
+    [ "$_fwchg" = "1" ] && { uci commit firewall; /etc/init.d/firewall reload >/dev/null 2>&1; }
 fi
 
 # Migration: remove legacy UCI firewall kill switch rules (pre-v1.0.9)
@@ -364,57 +419,11 @@ fi
 # Single firewall commit + reload for all accumulated guest forwarding changes
 [ "$_fw_dirty" = "1" ] && { uci commit firewall; /etc/init.d/firewall reload; }
 
-# Sync kill switch routing rules (ip rule + ip route)
-# Uses policy routing instead of firewall rules to block before conntrack.
-# Table 100 = unreachable default, priority 5280 = after Tailscale's 5270.
-kill_switch=$(uci -q get ts-fix.settings.kill_switch)
+# Kill switch routing rules are installed near the top of this script now
+# (right after the flock), so they come up before the daemon waits and are
+# driven purely by the user's kill_switch intent. Nothing exit-node-dependent
+# remains here — see the "Kill switch (policy routing ...)" block above.
 
-# Check actual tailscale exit node state — GL's UCI (tailscale.settings.exit_node_ip)
-# is unreliable because GL does not clear it when Custom Exit Node is disabled via
-# the admin panel (calls tailscale set --exit-node= but leaves UCI stale).
-exit_node_id=$(/usr/sbin/tailscale debug prefs 2>/dev/null | jsonfilter -e '@.ExitNodeID' 2>/dev/null)
-
-# Auto-disable kill switch if enabled but no exit node configured.
-# This covers the case where a user disables Custom Exit Node while the
-# kill switch is active — without this, the KS routing rules remain active
-# but the KS toggle disappears from the UI (hidden when no exit node),
-# blocking all LAN/guest traffic with no way to turn it off.
-#
-# IMPORTANT: ExitNodeID is transiently empty during gl_tailscale restart
-# (tailscale up --reset clears it, then re-applies). If GL's UCI still has
-# an exit_node_ip configured, we're in a restart transient — do NOT auto-
-# disable. The watchdog handles the deliberate removal case (GL clears the
-# exit node via tailscale set --exit-node= but leaves UCI stale).
-gl_exit_ip=$(uci -q get tailscale.settings.exit_node_ip)
-if [ "$kill_switch" = "1" ] && [ -z "$exit_node_id" ] && [ -z "$gl_exit_ip" ]; then
-    uci -q set ts-fix.settings.kill_switch=0
-    uci commit ts-fix
-    kill_switch="0"
-fi
-
-if [ "$kill_switch" = "1" ] && [ -n "$exit_node_id" ]; then
-    # Install kill switch routing rules for both address families.
-    # "ip -6" errors are suppressed — harmless if IPv6 is compiled out
-    # (calls fail) or merely disabled (rules install inert).
-    for fam in -4 -6; do
-        # Ensure table 100 has unreachable default
-        ip $fam route show table 100 2>/dev/null | grep -q "unreachable default" || \
-            ip $fam route add unreachable default table 100 2>/dev/null
-        # Add ip rules for br-lan and br-guest (idempotent)
-        ip $fam rule list priority 5280 2>/dev/null | grep -q "iif br-lan" || \
-            ip $fam rule add iif br-lan priority 5280 lookup 100 2>/dev/null
-        ip $fam rule list priority 5280 2>/dev/null | grep -q "iif br-guest" || \
-            ip $fam rule add iif br-guest priority 5280 lookup 100 2>/dev/null
-    done
-else
-    # Remove kill switch routing rules, both families (suppress errors)
-    for fam in -4 -6; do
-        ip $fam rule del iif br-lan priority 5280 lookup 100 2>/dev/null
-        ip $fam rule del iif br-guest priority 5280 lookup 100 2>/dev/null
-        ip $fam route del unreachable default table 100 2>/dev/null
-    done
-fi
-
-# Explicit success — the trailing "ip ... del" returns rc 2 when the rules
-# are already absent (normal KS-off path); don't propagate that as failure.
+# Explicit success — earlier idempotent ip/uci deletes can return nonzero when
+# the target is already absent (normal no-op paths); don't propagate as failure.
 exit 0
