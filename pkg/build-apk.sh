@@ -14,9 +14,13 @@
 #                                                 which is exactly the PKG_UPGRADE=1 skip
 #                                                 the opkg prerm implements by hand)
 #
-# Requirements: apk-tools >= 3 (apk mkpkg), run as root or under fakeroot — extraction must
-# preserve the archive's 0/0 ownership or mkpkg records the build user instead (same failure
-# class the ipk build fixed with tar --owner=0). CI runs this inside an alpine:edge container.
+# Requirements: apk-tools >= 3 (apk mkpkg), run as root (CI container) or inside a rootless
+# user namespace (`unshare -r sh -c '…'`) — extraction must preserve the archive's 0/0
+# ownership or mkpkg records the build user instead (same failure class the ipk build fixed
+# with tar --owner=0). NOTE: fakeroot does NOT work when apk is the static binary
+# (apk-tools-static) — fakeroot is LD_PRELOAD-based and cannot hook a statically-linked
+# binary, which then stat()s the real filesystem and records the build user (observed
+# 2026-07-19: a fakeroot build produced krm-owned entries; unshare -r produced root).
 #
 # Usage: build-apk.sh <path/to/package.ipk> [out-dir]
 set -eu
@@ -25,7 +29,14 @@ IPK="$1"
 OUT_DIR="${2:-$(dirname "$IPK")}"
 
 command -v apk >/dev/null 2>&1 || { echo "ERROR: apk not found (need apk-tools >= 3)" >&2; exit 1; }
-apk mkpkg --help >/dev/null 2>&1 || { echo "ERROR: this apk lacks mkpkg (need apk-tools >= 3)" >&2; exit 1; }
+# mkpkg-availability probe by error string, not --help: apk-tools-static builds strip the
+# help system ("built without help", nonzero exit) while still fully supporting mkpkg.
+# A v2 apk answers "'mkpkg' is not an apk command"; a v3 apk answers with a missing-args
+# error. Probed empirically on apk-tools-static 3.0.6.
+if apk mkpkg 2>&1 | grep -q "is not an apk command"; then
+    echo "ERROR: this apk lacks mkpkg (need apk-tools >= 3)" >&2
+    exit 1
+fi
 [ -f "$IPK" ] || { echo "ERROR: ipk not found: $IPK" >&2; exit 1; }
 if [ "$(id -u)" != "0" ]; then
     echo "WARNING: not running as root — extracted file ownership will be recorded as $(id -un)," >&2
@@ -35,10 +46,15 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-tar xzf "$IPK" -C "$WORK"
+# --no-same-owner everywhere: extraction ownership = the invoking user (root in CI /
+# under unshare -r), NOT whatever the source archive recorded. This deliberately
+# NORMALIZES ownership — ipks built before the tar --owner=0 fix (v1.0.21 and earlier
+# releases) record the CI runner's uid 1001, which is both wrong for the derived package
+# and unmappable inside a rootless user namespace (tar chown fails outright).
+tar xzf "$IPK" -C "$WORK" --no-same-owner
 mkdir -p "$WORK/files" "$WORK/ctrl"
-tar xzf "$WORK/data.tar.gz" -C "$WORK/files"
-tar xzf "$WORK/control.tar.gz" -C "$WORK/ctrl"
+tar xzf "$WORK/data.tar.gz" -C "$WORK/files" --no-same-owner
+tar xzf "$WORK/control.tar.gz" -C "$WORK/ctrl" --no-same-owner
 
 ctl() { sed -n "s/^$1: //p" "$WORK/ctrl/control" | head -1; }
 NAME=$(ctl Package)
