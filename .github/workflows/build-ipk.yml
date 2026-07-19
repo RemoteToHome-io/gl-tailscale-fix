@@ -56,6 +56,29 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # OpenWrt 25.12+ replaced opkg with apk; derive an .apk from the built .ipk
+      # (content-identical by construction — see pkg/build-apk.sh). Runs in an
+      # alpine:edge container because mkpkg needs apk-tools v3 (edge ships 3.0.x),
+      # and as container-root so extraction preserves the archive's 0/0 ownership.
+      - name: Build APK package (OpenWrt 25 / apk-based firmware)
+        shell: bash
+        run: |
+          chmod +x pkg/build-apk.sh
+          docker run --rm -v "$PWD:/w" -w /w alpine:edge sh -ec '
+            apk add --no-cache --upgrade apk-tools >/dev/null
+            ./pkg/build-apk.sh "build/out/gl-tailscale-fix_${{ steps.vars.outputs.version }}_all.ipk" build/out
+          '
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gl-tailscale-fix-${{ steps.vars.outputs.version }}.apk
+          path: |
+            build/out/*.apk
+            build/out/*.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Prepare release assets
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -70,6 +93,12 @@ jobs:
               "gl-tailscale-fix_latest_all.ipk.sha256"
           )
 
+      # NOTE: the .apk is deliberately NOT in the release file list yet — it ships as a
+      # CI artifact only until one clean install/remove/upgrade cycle is verified on a
+      # real OpenWrt-25-based GL device (TODO #20). Once validated, add these two lines
+      # under files:
+      #     build/out/gl-tailscale-fix-<version>.apk
+      #     build/out/gl-tailscale-fix-<version>.apk.sha256
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
