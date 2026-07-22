@@ -21,6 +21,16 @@ if [ -f '/rom/usr/bin/gl_tailscale' ] && ! cmp -s '/rom/usr/bin/gl_tailscale' '/
     cp '/rom/usr/bin/gl_tailscale' '/usr/bin/gl_tailscale' 2>/dev/null || true
 fi
 
+# Re-apply stored login_server patch if the user has configured a custom
+# coordination server (e.g. Headscale). The restore above resets gl_tailscale
+# to the factory script, so we must re-inject --login-server afterwards.
+_stored_login_server=$(uci -q get ts-fix.settings.login_server 2>/dev/null)
+_default_login_server="https://controlplane.tailscale.com"
+if [ -n "$_stored_login_server" ] && [ "$_stored_login_server" != "$_default_login_server" ]; then
+    sed -i 's/ --login-server [^ ]*//g' /usr/bin/gl_tailscale 2>/dev/null
+    sed -i "s|/usr/sbin/tailscale up |/usr/sbin/tailscale up --login-server ${_stored_login_server} |" /usr/bin/gl_tailscale 2>/dev/null
+fi
+
 # Ensure tailscale CLI symlink exists (combined binary installs only have
 # tailscaled; the symlink may be missing after sysupgrade or manual cleanup)
 if [ -f /usr/sbin/tailscaled ] && [ ! -e /usr/sbin/tailscale ]; then

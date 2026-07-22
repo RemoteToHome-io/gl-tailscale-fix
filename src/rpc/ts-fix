@@ -15,6 +15,9 @@ local TS_FIX_CONFIG = "ts-fix"
 local FW_CONFIG = "firewall"
 local TS_CONFIG = "tailscale"
 
+local DEFAULT_LOGIN_SERVER = "https://controlplane.tailscale.com"
+local GL_TAILSCALE_SCRIPT = "/usr/bin/gl_tailscale"
+
 -- Version check cache TTL (72 hours)
 local CACHE_TTL = 259200
 
@@ -305,6 +308,28 @@ local function ensure_wan_v6_masq_for_exit_node(advertise_on)
     end
 end
 
+-- Helper: patch /usr/bin/gl_tailscale to set (or remove) --login-server.
+-- Idempotent: strips any existing --login-server flag first, then inserts
+-- the new one unless it matches the default Tailscale coordination server.
+-- URL is validated to only contain characters safe for sed substitution
+-- before being written into the script.
+local function patch_gl_tailscale_login_server(url)
+    -- Basic URL sanity: must start with http(s):// followed by safe chars only.
+    -- This prevents command injection via the sed substitution.
+    if url and url ~= "" and not url:match("^https?://[%w%.%-%_/:]+$") then
+        ngx.log(ngx.WARN, "ts-fix: login_server URL failed validation, skipping patch: " .. tostring(url))
+        return false
+    end
+    -- Strip any existing --login-server flag (idempotent)
+    exec("sed -i 's/ --login-server [^ ]*//g' " .. GL_TAILSCALE_SCRIPT)
+    -- Insert the new URL unless it is the default (no point cluttering the script)
+    local effective = url and url ~= "" and url or DEFAULT_LOGIN_SERVER
+    if effective ~= DEFAULT_LOGIN_SERVER then
+        exec("sed -i 's|/usr/sbin/tailscale up |/usr/sbin/tailscale up --login-server " .. effective .. " |' " .. GL_TAILSCALE_SCRIPT)
+    end
+    return true
+end
+
 -- Helper: fix guest subnet policy route for exit node compatibility.
 -- When the guest subnet is advertised, Tailscale creates a source-based rule
 -- at priority 0: "from <guest_subnet> lookup main". This catches ALL traffic
@@ -425,6 +450,7 @@ function M.get_config()
     res.route_guest = c:get(TS_FIX_CONFIG, "settings", "route_guest") == "1"
     res.tailscale_ssh = c:get(TS_FIX_CONFIG, "settings", "tailscale_ssh") == "1"
     res.ks_upgrade_hint_pending = c:get(TS_FIX_CONFIG, "settings", "ks_upgrade_hint_pending") == "1"
+    res.login_server = c:get(TS_FIX_CONFIG, "settings", "login_server") or DEFAULT_LOGIN_SERVER
 
     -- GL's Tailscale UCI settings
     res.ts_enabled = c:get(TS_CONFIG, "settings", "enabled") == "1"
@@ -493,6 +519,27 @@ end
 --]]
 function M.set_config(params)
     local c = uci.cursor()
+
+    -- Handle login_server before the ts_enabled guard: patching gl_tailscale
+    -- doesn't require the daemon to be running.
+    if params.login_server ~= nil then
+        local url = params.login_server
+        if url == "" then url = DEFAULT_LOGIN_SERVER end
+        if not patch_gl_tailscale_login_server(url) then
+            return { err_code = -4, err_msg = "Invalid login_server URL" }
+        end
+        c:set(TS_FIX_CONFIG, "settings", "login_server", url)
+        if not c:commit(TS_FIX_CONFIG) then
+            return { err_code = -3, err_msg = "Failed to commit login_server setting" }
+        end
+        -- If only login_server changed, return now (no daemon interaction needed).
+        -- Caller must disable/re-enable Tailscale for the new URL to take effect.
+        local other_keys = false
+        for k, _ in pairs(params) do
+            if k ~= "login_server" then other_keys = true; break end
+        end
+        if not other_keys then return {} end
+    end
 
     -- Check tailscale is enabled
     local ts_enabled = c:get(TS_CONFIG, "settings", "enabled") == "1"
