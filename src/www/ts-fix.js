@@ -217,6 +217,17 @@ function injectStyles() {
     '@keyframes ts-fix-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }',
     '.ts-fix-dark .ts-fix-refresh-btn { color: #606266; }',
     '.ts-fix-dark .ts-fix-refresh-btn:hover { color: #5272f7; }',
+    '.ts-fix-input {',
+    '  font-size: 12px; padding: 4px 8px;',
+    '  border: 1px solid #dcdfe6; border-radius: 4px;',
+    '  width: 200px; color: #303133; background: #fff;',
+    '  outline: none;',
+    '}',
+    '.ts-fix-input:focus { border-color: #5272f7; }',
+    '.ts-fix-dark .ts-fix-input {',
+    '  background: #1e2132; border-color: rgba(145,149,170,0.3);',
+    '  color: #9195aa;',
+    '}',
   ].join('\n');
   document.head.appendChild(style);
 }
@@ -261,10 +272,36 @@ var TIPS = {
   killSwitch: 'Routing-level kill switch - Uses policy routing to block all LAN/Guest traffic from reaching the WAN directly whenever it is enabled, so your real IP cannot leak if the exit-node tunnel drops, tailscaled crashes, or the daemon restarts. Stays armed until you turn it off or disable Tailscale - removing the exit node does NOT disable it (traffic stays blocked, fail-secure).',
   routeGuest: 'Extends GL\'s "Allow Remote Access" to the Guest network. Adds Guest\u2194Tailscale forwardings and advertises the guest subnet to your tailnet.',
   tailscaleSsh: 'Enable Tailscale\'s ACL-based SSH authentication for this router. Most users don\'t need this \u2014 SSH to the router\'s Tailscale IP already works through the normal SSH daemon (Dropbear) without any extra setup. Enable this only if you specifically want identity-based access controlled by a Tailscale SSH ACL rule (Access Controls \u2192 Tailscale SSH tab). While enabled, tailscaled takes over port 22 for tailnet-origin traffic, which breaks SSH from LAN clients that reach the router via Tailscale subnet routing. In that case, run Dropbear on an alternate port (System \u2192 Administration \u2192 SSH Access) to keep a path open for both Tailscale and LAN clients.',
-  version: 'Manage Tailscale binary version. Combined binaries provided by admonstrator/glinet-tailscale-updater.'
+  version: 'Manage Tailscale binary version. Combined binaries provided by admonstrator/glinet-tailscale-updater.',
+  loginServer: 'Coordination server URL. Set this to your self-hosted Headscale server (e.g. https://headscale.example.com). Leave as the default to use Tailscale\'s official servers. Changes take effect after disabling and re-enabling Tailscale.'
 };
 
 // -- Build UI --
+
+function createInputRow(id, label, tip, placeholder) {
+  var row = document.createElement('div');
+  row.className = 'ts-fix-row';
+  row.id = 'ts-fix-row-' + id;
+
+  var labelDiv = document.createElement('div');
+  labelDiv.className = 'ts-fix-label';
+  labelDiv.textContent = label + ' ';
+  var info = document.createElement('span');
+  info.className = 'ts-fix-info';
+  info.textContent = 'i';
+  info.setAttribute('data-tip', tip);
+  labelDiv.appendChild(info);
+
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'ts-fix-input';
+  input.id = 'ts-fix-input-' + id;
+  input.placeholder = placeholder || '';
+
+  row.appendChild(labelDiv);
+  row.appendChild(input);
+  return row;
+}
 
 function createToggleRow(id, label, tip, opts) {
   opts = opts || {};
@@ -317,6 +354,9 @@ function buildSection() {
   badgeWrap.appendChild(refreshBtn);
   divider.appendChild(badgeWrap);
   section.appendChild(divider);
+
+  // Coordination server (Headscale / custom)
+  section.appendChild(createInputRow('login-server', 'Coordination Server', TIPS.loginServer, 'https://controlplane.tailscale.com'));
 
   // Allow Remote Access Guest (extends native GL function)
   section.appendChild(createToggleRow('route-guest', 'Allow Remote Access Guest', TIPS.routeGuest));
@@ -371,11 +411,14 @@ function buildSection() {
 
 // -- State management --
 
+var DEFAULT_LOGIN_SERVER = 'https://controlplane.tailscale.com';
+
 var state = {
   advertise_exit_node: false,
   kill_switch: false,
   route_guest: false,
   tailscale_ssh: false,
+  login_server: DEFAULT_LOGIN_SERVER,
   ts_enabled: false,
   ts_running: false,
   wan_enabled: false,
@@ -477,6 +520,12 @@ function refreshUI() {
   setToggle('route-guest', state.route_guest, notReady);
   setToggle('tailscale-ssh', state.tailscale_ssh, notReady);
   setToggle('kill-switch', state.kill_switch, notReady);
+
+  // Sync login-server input value (only when not actively editing)
+  var lsInput = document.getElementById('ts-fix-input-login-server');
+  if (lsInput && document.activeElement !== lsInput) {
+    lsInput.value = state.login_server || DEFAULT_LOGIN_SERVER;
+  }
 
   // WAN warning: show when exit node enabled but Allow Remote Access WAN is off.
   // Hidden on 4.9+ since the Advertise as Exit Node toggle itself is hidden there.
@@ -782,19 +831,23 @@ function applyPendingChanges() {
   if (keys.length === 0) return;
 
   var params = {};
-  keys.forEach(function(k) { params[k] = pendingChanges[k]; });
+  var prevValues = {};
+  keys.forEach(function(k) {
+    prevValues[k] = state[k];
+    params[k] = pendingChanges[k];
+  });
   pendingChanges = {};
 
   rpc('ts-fix', 'set_config', params).then(function(res) {
     if (res.err_code) {
       // Revert on error
-      keys.forEach(function(k) { state[k] = !params[k]; });
+      keys.forEach(function(k) { state[k] = prevValues[k]; });
       refreshUI();
       return;
     }
     setTimeout(fetchConfig, 500);
   }).catch(function() {
-    keys.forEach(function(k) { state[k] = !params[k]; });
+    keys.forEach(function(k) { state[k] = prevValues[k]; });
     refreshUI();
   });
 }
@@ -1061,6 +1114,23 @@ function inject() {
       });
     }
   });
+
+  // Wire up login-server input (stage change on blur or Enter)
+  var lsInput = document.getElementById('ts-fix-input-login-server');
+  if (lsInput) {
+    function stageLoginServer() {
+      var val = lsInput.value.trim() || DEFAULT_LOGIN_SERVER;
+      if (val !== state.login_server) {
+        state.login_server = val;
+        pendingChanges.login_server = val;
+        activateApplyButton();
+      }
+    }
+    lsInput.addEventListener('blur', stageLoginServer);
+    lsInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { lsInput.blur(); }
+    });
+  }
 
   // Hook GL's Apply button (event delegation — only needs to run once)
   hookApplyButton();
