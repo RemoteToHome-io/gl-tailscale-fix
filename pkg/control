@@ -7,8 +7,8 @@ Priority: optional
 Description: Tailscale enhancements for GL.iNet routers
  Adds features that complement GL's native Tailscale integration:
  a kernel-level policy-routing kill switch (IPv4 and IPv6) that
- survives tailscaled crashes, guest network routing through the
- Tailscale exit node, optional Tailscale SSH toggle for ACL-based
+ survives tailscaled crashes, guest and IoT network routing through
+ the Tailscale exit node, optional Tailscale SSH toggle for ACL-based
  authentication, and a Tailscale binary version manager. On
  firmware 4.9+, the plugin auto-adapts to coexist with GL's native
  Tailscale features.

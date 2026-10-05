@@ -135,7 +135,7 @@ ts_domain_clean() {
 }
 # ---8<--- end ts_domain_clean ---8<---
 
-# Guest network helpers for Route Guest.
+# Guest network helper for Route Guest.
 #
 # guest_net echoes br-guest's IPv4 network as NETWORK/PREFIX, or nothing when br-guest has no IPv4
 # address or ipcalc fails. The network comes from ipcalc.sh, the tool GL's own script relies on to
@@ -144,11 +144,6 @@ ts_domain_clean() {
 # the swap below and advertise a route that is not a network address. Only the first IPv4 address
 # is read, as the RPC reads it, and only one of the form a.b.c.d/N is handed to ipcalc: for an
 # empty or prefix-less argument ipcalc answers 0.0.0.0/0, which must never reach the code below.
-#
-# route_list_drop echoes the comma-separated route list $1 without the entry $2, comparing whole
-# entries as strings. Removal used to run sed with the subnet inside the program, where its "/"
-# ended the s command — sed failed, and its empty output took the --advertise-routes= branch — and
-# its dots would have matched any character.
 #
 # IPCALC exists so tests/unit/test-guest-net.sh can substitute a fake; nothing else sets it.
 # ---8<--- guest_net (unit-tested by tests/unit/test-guest-net.sh) ---8<---
@@ -165,7 +160,49 @@ guest_net() {
         $1 == "PREFIX" { p = $2 }
         END { if (n ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && p ~ /^[0-9]+$/) print n "/" p }'
 }
+# ---8<--- end guest_net ---8<---
 
+# IoT network helper for Route IoT.
+#
+# iot_net echoes br-iot's IPv4 network as NETWORK/PREFIX, or nothing when br-iot has no IPv4
+# address or ipcalc fails. The network comes from ipcalc.sh, the tool GL's own script relies on to
+# build its "from <iot net>" rule, never from zeroing the last octet: that is right only for a
+# /24. 192.168.10.1/23 is network 192.168.10.0/23, and 192.168.10.0/23 would miss GL's rule in
+# the swap below and advertise a route that is not a network address. Only the first IPv4 address
+# is read, as the RPC reads it, and only one of the form a.b.c.d/N is handed to ipcalc: for an
+# empty or prefix-less argument ipcalc answers 0.0.0.0/0, which must never reach the code below.
+# br-iot is absent on firmware without the IoT network (created since 4.9.0, disabled by default),
+# and this echoes nothing then.
+#
+# IPCALC exists so tests/unit/test-iot-net.sh can substitute a fake; nothing else sets it.
+#
+# This block carries its own markers because prerm evals it on its own; IPCALC is defaulted again
+# here so the block stands alone.
+# ---8<--- iot_net (unit-tested by tests/unit/test-iot-net.sh) ---8<---
+IPCALC=${IPCALC:-/bin/ipcalc.sh}
+
+iot_net() {
+    local addr out
+    addr=$(ip -4 addr show br-iot 2>/dev/null |
+        awk '$1 == "inet" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ { print $2; exit }')
+    [ -n "$addr" ] || return 0
+    out=$("$IPCALC" "$addr" 2>/dev/null) || return 0
+    printf '%s\n' "$out" | awk -F= '
+        $1 == "NETWORK" { n = $2 }
+        $1 == "PREFIX" { p = $2 }
+        END { if (n ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && p ~ /^[0-9]+$/) print n "/" p }'
+}
+# ---8<--- end iot_net ---8<---
+
+# route_list_drop echoes the comma-separated route list $1 without the entry $2, comparing whole
+# entries as strings. Removal used to run sed with the subnet inside the program, where its "/"
+# ended the s command — sed failed, and its empty output took the --advertise-routes= branch — and
+# its dots would have matched any character.
+#
+# Shared: Route Guest and Route IoT both remove a subnet this way, so it is kept in its own block
+# rather than in either network's helper block. Its cases live in tests/unit/test-guest-net.sh,
+# where they already were; the Route IoT advertisement block only calls it.
+# ---8<--- route_list_drop (unit-tested by tests/unit/test-guest-net.sh) ---8<---
 route_list_drop() {
     local out="" r
     for r in $(printf '%s\n' "$1" | tr ',' ' '); do
@@ -173,7 +210,7 @@ route_list_drop() {
     done
     printf '%s\n' "$out"
 }
-# ---8<--- end guest_net ---8<---
+# ---8<--- end route_list_drop ---8<---
 
 # ---8<--- ts_state
 # The kill switch's intent, read as the engine reads it (_ks_intent in /usr/bin/ts-fix-ks). This
@@ -261,6 +298,10 @@ if [ "$ts_en" = "0" ]; then
     _gs=$(guest_net)
     [ -n "$_gs" ] && ip rule del to "$_gs" table main 2>/dev/null
 
+    # Remove IoT policy route fixup
+    _iot=$(iot_net)
+    [ -n "$_iot" ] && ip rule del to "$_iot" table main 2>/dev/null
+
     # Remove guest subnet from advertised routes (pgrep guard — avoids
     # spawning ~60MB Go process if daemon already stopped during disable)
     if [ -n "$_gs" ] && pgrep tailscaled >/dev/null 2>&1; then
@@ -279,16 +320,39 @@ if [ "$ts_en" = "0" ]; then
         esac
     fi
 
+    # Remove IoT subnet from advertised routes (pgrep guard — avoids
+    # spawning ~60MB Go process if daemon already stopped during disable)
+    if [ -n "$_iot" ] && pgrep tailscaled >/dev/null 2>&1; then
+        _cur=$(timeout 10 /usr/sbin/tailscale debug prefs 2>/dev/null | jsonfilter -e '@.AdvertiseRoutes[*]' 2>/dev/null | tr '\n' ',')
+        case ",$_cur," in
+            *",$_iot,"*)
+                _new=$(route_list_drop "$_cur" "$_iot")
+                if [ -n "$_new" ]; then
+                    timeout 10 /usr/sbin/tailscale set --advertise-routes="$_new" 2>/dev/null || \
+                        logger -t ts-fix "route iot off: tailscale set --advertise-routes failed or timed out (rc $?) - the IoT subnet may still be advertised"
+                else
+                    timeout 10 /usr/sbin/tailscale set --advertise-routes= 2>/dev/null || \
+                        logger -t ts-fix "route iot off: tailscale set --advertise-routes= failed or timed out (rc $?) - the IoT subnet may still be advertised"
+                fi
+                ;;
+        esac
+    fi
+
     # Remove legacy UCI firewall kill switch rules (pre-v1.0.9)
     for section in ts_ks_lan2wan ts_ks_guest2wan; do
         uci -q delete firewall.$section 2>/dev/null
     done
 
-    # Remove guest<->tailscale firewall forwardings and masquerade
+    # Remove guest<->tailscale and iot<->tailscale firewall forwardings and masquerade
     _fw=0
     [ -n "$(uci -q get firewall.ts_fix_guest2ts)" ] && {
         uci -q delete firewall.ts_fix_guest2ts
         uci -q delete firewall.ts_fix_ts2guest
+        _fw=1
+    }
+    [ -n "$(uci -q get firewall.ts_fix_iot2ts)" ] && {
+        uci -q delete firewall.ts_fix_iot2ts
+        uci -q delete firewall.ts_fix_ts2iot
         _fw=1
     }
     # masq6 (IPv6) is plugin-owned on ALL firmware (GL never sets it), so clear
@@ -327,6 +391,7 @@ if [ "$ts_en" = "0" ]; then
     # Reset all ts-fix UCI settings to 0
     uci -q set ts-fix.settings.kill_switch=0
     uci -q set ts-fix.settings.route_guest=0
+    uci -q set ts-fix.settings.route_iot=0
     uci -q set ts-fix.settings.advertise_exit_node=0
     uci -q set ts-fix.settings.tailscale_ssh=0
     uci commit ts-fix
@@ -667,6 +732,54 @@ else
 fi
 # ---8<--- end route guest advertise ---8<---
 
+# Re-apply IoT subnet route advertisement
+route_iot=$(uci -q get ts-fix.settings.route_iot)
+iot_subnet=$(iot_net)
+# ---8<--- route iot advertise ---8<---
+if [ "$route_iot" = "1" ]; then
+    if [ -n "$iot_subnet" ]; then
+        # Get current routes, add IoT subnet if missing. --advertise-routes REPLACES the whole
+        # list, so the routes are read on their own first: a read that fails or times out prints
+        # nothing, and nothing must not pass for "no routes" — the add would then drop every other
+        # advertised route. Such a pass writes nothing and leaves the daemon-pending flag, as a
+        # pass with the daemon down does, so the watchdog retries it.
+        if prefs=$(timeout 10 /usr/sbin/tailscale debug prefs 2>/dev/null) && [ -n "$prefs" ]; then
+            current=$(printf '%s\n' "$prefs" | jsonfilter -e '@.AdvertiseRoutes[*]' 2>/dev/null | tr '\n' ',')
+            case ",$current," in
+                *",$iot_subnet,"*) ;; # already present
+                *)
+                    new_routes="${current}${iot_subnet}"
+                    new_routes=$(echo "$new_routes" | sed 's/,$//')
+                    timeout 10 /usr/sbin/tailscale set --advertise-routes="$new_routes" 2>/dev/null || \
+                        logger -t ts-fix "route iot: tailscale set --advertise-routes failed or timed out (rc $?) - the IoT subnet is not advertised"
+                    ;;
+            esac
+        else
+            logger -t ts-fix "route iot: tailscale debug prefs failed or timed out - advertised routes unknown, IoT subnet not added; pending for the watchdog's retry"
+            routes_unread=1
+        fi
+    fi
+else
+    # Remove IoT subnet from advertised routes if present. A failed read prints nothing, which
+    # matches no route, so nothing is written — as with the daemon down.
+    if [ -n "$iot_subnet" ]; then
+        current=$(timeout 10 /usr/sbin/tailscale debug prefs 2>/dev/null | jsonfilter -e '@.AdvertiseRoutes[*]' 2>/dev/null | tr '\n' ',')
+        case ",$current," in
+            *",$iot_subnet,"*)
+                new_routes=$(route_list_drop "$current" "$iot_subnet")
+                if [ -n "$new_routes" ]; then
+                    timeout 10 /usr/sbin/tailscale set --advertise-routes="$new_routes" 2>/dev/null || \
+                        logger -t ts-fix "route iot off: tailscale set --advertise-routes failed or timed out (rc $?) - the IoT subnet may still be advertised"
+                else
+                    timeout 10 /usr/sbin/tailscale set --advertise-routes= 2>/dev/null || \
+                        logger -t ts-fix "route iot off: tailscale set --advertise-routes= failed or timed out (rc $?) - the IoT subnet may still be advertised"
+                fi
+                ;;
+        esac
+    fi
+fi
+# ---8<--- end route iot advertise ---8<---
+
 # Fix guest subnet policy route for exit node compatibility.
 # GL's gl_tailscale adds "from <guest_subnet> lookup main" at priority 0
 # whenever a Custom Exit Node is set and the guest network is enabled. This
@@ -690,6 +803,30 @@ else
     }
 fi
 
+
+# Fix IoT subnet policy route for exit node compatibility. GL's gl_tailscale adds
+# "from <iot_subnet> lookup main" at priority 0 whenever a Custom Exit Node is set and
+# the IoT network is enabled. This blocks IoT clients from using the exit node. Replace
+# with "to <iot_subnet>" (destination-based, the shape of GL's own LAN rule).
+if [ "$route_iot" = "1" ] && [ -n "$iot_subnet" ]; then
+    ip rule del from "$iot_subnet" lookup main 2>/dev/null
+    ip rule del to "$iot_subnet" table main 2>/dev/null
+    ip rule add to "$iot_subnet" table main priority 0
+else
+    # Clean up our destination-based rule if present
+    _is=$(iot_net)
+    [ -n "$_is" ] && {
+        ip rule del to "$_is" table main 2>/dev/null
+        # That is also the kill switch's own rule: while armed, the engine's source-rule swap keeps
+        # exactly this "to <iot net>" rule in place of GL's "from" rule. Put it back at once rather
+        # than leave IoT-bound traffic to the exit node's table until the next engine pass.
+        # rules-ensure takes no lock and self-gates on armed intent and Router mode, so on a
+        # disarmed router it is a no-op.
+        /usr/bin/ts-fix-ks rules-ensure </dev/null
+    }
+fi
+
+
 # Sync firewall state (batched — single commit + reload at end)
 _fw_dirty=0
 
@@ -712,7 +849,26 @@ else
     fi
 fi
 
-# Single firewall commit + reload for all accumulated guest forwarding changes
+# IoT routing firewall forwardings
+if [ "$route_iot" = "1" ]; then
+    if [ -z "$(uci -q get firewall.ts_fix_iot2ts)" ]; then
+        uci set firewall.ts_fix_iot2ts=forwarding
+        uci set firewall.ts_fix_iot2ts.src=iot
+        uci set firewall.ts_fix_iot2ts.dest=tailscale0
+        uci set firewall.ts_fix_ts2iot=forwarding
+        uci set firewall.ts_fix_ts2iot.src=tailscale0
+        uci set firewall.ts_fix_ts2iot.dest=iot
+        _fw_dirty=1
+    fi
+else
+    if [ -n "$(uci -q get firewall.ts_fix_iot2ts)" ]; then
+        uci -q delete firewall.ts_fix_iot2ts
+        uci -q delete firewall.ts_fix_ts2iot
+        _fw_dirty=1
+    fi
+fi
+
+# Single firewall commit + reload for all accumulated guest/IoT forwarding changes
 [ "$_fw_dirty" = "1" ] && { uci commit firewall; /etc/init.d/firewall reload; }
 
 # A pass reaching here applied every daemon-level setting against a Running daemon — nothing pends —

@@ -169,6 +169,7 @@ ip() {
         "-4 rule list priority 0") return 0 ;;
         "-4 route show table 52") [ -n "$FK_T52" ] && printf '%s\n' "$FK_T52"; return 0 ;;
         "-4 addr show br-guest") return 0 ;;
+        "-4 addr show br-iot") return 0 ;;
     esac
     printf 'ip %s\n' "$*" >> "$FK_DIR/unexpected"
     return 1

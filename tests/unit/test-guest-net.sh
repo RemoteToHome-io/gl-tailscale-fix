@@ -57,7 +57,10 @@ ip() {
     [ -z "$INET" ] || printf '%s\n' "$INET"
 }
 line() { printf '    inet %s scope global br-guest' "$1"; }
-extract() { awk '/^# ---8<--- guest_net/,/^# ---8<--- end guest_net/' "$SRC"; }
+extract() {
+    awk '/^# ---8<--- guest_net/,/^# ---8<--- end guest_net/' "$SRC"
+    awk '/^# ---8<--- route_list_drop/,/^# ---8<--- end route_list_drop/' "$SRC"
+}
 
 if [ "$MODE" = legacy ]; then
     # The pre-fix code, copied from ts-fix-reapply as it stood before this change: the derivation
@@ -151,7 +154,7 @@ if [ "$MODE" != legacy ]; then
         "$(grep -nE 'sed .*\$\{?(_gs|guest_subnet)' "$SRC")"
     report GUARD "RPC no longer builds a.b.c.0/<prefix>" "" "$(grep -nF '".0/"' "$RPC")"
     report GUARD "RPC derives the network with /bin/ipcalc.sh" "1" \
-        "$(grep -cF '"/bin/ipcalc.sh ' "$RPC")"
+        "$(awk '/^local function get_guest_subnet/,/^end/' "$RPC" | grep -cF '"/bin/ipcalc.sh ')"
 
     # Route Guest's advertisement block, extracted between its markers. --advertise-routes REPLACES
     # the whole list, so the add reads the current routes first — and a read that fails or times

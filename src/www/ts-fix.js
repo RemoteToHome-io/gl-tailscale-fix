@@ -262,6 +262,7 @@ var TIPS = {
   ksFollow: 'Automatically arm the Kill Switch whenever a Custom Exit Node is configured, and disarm it when the exit node selection is cleared. With this on, turning Custom Exit Node off also turns the Kill Switch off, and traffic uses your normal connection until you pick a new exit node. To switch exit nodes without a gap, leave this off. Tracks GL\'s stored Custom Exit Node setting (applied within ~5 seconds). Leave off to control the Kill Switch manually. Note: on some pre-4.9 firmware GL can leave a stale exit-node value after disabling Custom Exit Node - if the Kill Switch arms unexpectedly, clear the Custom Exit Node selection or turn this off.',
   hideTsDomain: 'Stops the router advertising your Tailscale tailnet name (for example x.ts.net) to devices on your network, and keeps your own local domain instead. Tailnet names still resolve - only the advertised search-domain hint is removed. Useful if the tailnet name breaks local .lan name resolution, or if you would rather not hand connected devices a hint that Tailscale is in use.',
   routeGuest: 'Extends GL\'s "Allow Remote Access" to the Guest network. Adds Guest\u2194Tailscale forwardings and advertises the guest subnet to your tailnet.',
+  routeIot: 'Extends GL\'s "Allow Remote Access" to the IoT network. Adds IoT\u2194Tailscale forwardings and advertises the IoT subnet to your tailnet.',
   tailscaleSsh: 'Enable Tailscale\'s ACL-based SSH authentication for this router. Most users don\'t need this \u2014 SSH to the router\'s Tailscale IP already works through the normal SSH daemon (Dropbear) without any extra setup. Enable this only if you specifically want identity-based access controlled by a Tailscale SSH ACL rule (Access Controls \u2192 Tailscale SSH tab). While enabled, tailscaled takes over port 22 for tailnet-origin traffic, which breaks SSH from LAN clients that reach the router via Tailscale subnet routing. In that case, run Dropbear on an alternate port (System \u2192 Administration \u2192 SSH Access) to keep a path open for both Tailscale and LAN clients.',
   version: 'Manage Tailscale binary version. Combined binaries provided by admonstrator/glinet-tailscale-updater.'
 };
@@ -322,6 +323,10 @@ function buildSection() {
 
   // Allow Remote Access Guest (extends native GL function)
   section.appendChild(createToggleRow('route-guest', 'Allow Remote Access Guest', TIPS.routeGuest));
+
+  // Allow Remote Access IoT (extends native GL function — shown on 4.9+, where GL creates the
+  // IoT network; on older firmware there is no iot zone to forward to)
+  section.appendChild(createToggleRow('route-iot', 'Allow Remote Access IoT', TIPS.routeIot));
 
   // Kill Switch (extends native Custom Exit Node — shown when exit node client mode is active)
   section.appendChild(createToggleRow('kill-switch', 'Kill Switch', TIPS.killSwitch, {hidden: true}));
@@ -394,6 +399,7 @@ var state = {
   kill_switch: false,
   ks_follow_exit_node: false,
   route_guest: false,
+  route_iot: false,
   tailscale_ssh: false,
   ts_enabled: false,
   ts_running: false,
@@ -404,6 +410,7 @@ var state = {
   ssh_active: false,
   kill_switch_fw_active: false,
   route_guest_fw_active: false,
+  route_iot_fw_active: false,
   firmware_49_plus: false,
   firmware_version: '',
   ks_upgrade_hint_pending: false
@@ -466,6 +473,7 @@ function refreshUI() {
   // via the "Run Exit Node" toggle in its Tailscale admin UI.
   showRow('exit-node', state.ts_enabled && !state.firmware_49_plus);
   showRow('route-guest', state.ts_enabled);
+  showRow('route-iot', state.ts_enabled && state.firmware_49_plus);
   showRow('hide-ts-domain', state.ts_enabled);
   showRow('tailscale-ssh', state.ts_enabled);
   // Show kill switch when it's already on (so an armed KS is ALWAYS reversible —
@@ -503,6 +511,7 @@ function refreshUI() {
 
   setToggle('exit-node', state.advertise_exit_node, notReady);
   setToggle('route-guest', state.route_guest, notReady);
+  setToggle('route-iot', state.route_iot, notReady);
   setToggle('hide-ts-domain', state.hide_ts_domain, notReady);
   setToggle('tailscale-ssh', state.tailscale_ssh, notReady);
   // Kill Switch stays operable while tailscaled is down (claim-6, v1.0.22):
@@ -635,6 +644,7 @@ function ensureInformationalBanner() {
   ul.style.cssText = 'margin:6px 0 6px 18px;padding:0;';
   ['Kill Switch with kernel-level protection that persists through daemon restarts',
    'Guest network routing through the exit node',
+   'IoT network routing through the exit node',
    'Tailscale Version Manager',
    'Tailscale SSH toggle'].forEach(function(t) {
     var li = document.createElement('li');
@@ -1039,6 +1049,10 @@ function reapplyAfterGlRestart() {
       params.route_guest = true;
       needReapply = true;
     }
+    if (state.route_iot) {
+      params.route_iot = true;
+      needReapply = true;
+    }
     if (state.tailscale_ssh) {
       params.tailscale_ssh = true;
       needReapply = true;
@@ -1072,6 +1086,10 @@ function reapplyAfterGlRestart() {
       }
       if (state.route_guest && !res.route_guest_fw_active) {
         fixParams.route_guest = true;
+        needFix = true;
+      }
+      if (state.route_iot && !res.route_iot_fw_active) {
+        fixParams.route_iot = true;
         needFix = true;
       }
       if (state.tailscale_ssh && !res.ssh_active) {
@@ -1156,6 +1174,7 @@ function inject() {
   var toggles = {
     'exit-node': 'advertise_exit_node',
     'route-guest': 'route_guest',
+    'route-iot': 'route_iot',
     'tailscale-ssh': 'tailscale_ssh',
     'kill-switch': 'kill_switch',
     'ks-follow': 'ks_follow_exit_node',

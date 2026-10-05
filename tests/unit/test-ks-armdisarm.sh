@@ -4289,7 +4289,7 @@ INIT="$(dirname "$0")/../../src/init.d/ts-fix-preboot"
 REAPPLY="$(dirname "$0")/../../src/scripts/ts-fix-reapply"
 is "S16 the init script invokes preboot exactly once" 1 "$(grep -cF '/usr/bin/ts-fix-ks preboot' "$INIT")"
 is "S16 ... prefixed TS_FIX_KS_BOOT=1" 1 "$(grep -cE '^[[:space:]]*TS_FIX_KS_BOOT=1 /usr/bin/ts-fix-ks preboot( |$)' "$INIT")"
-is "S16 reapply calls rules-ensure exactly twice (after GL's chain; after Route Guest's delete, case SG)" 2 "$(grep -cF 'ts-fix-ks rules-ensure' "$REAPPLY")"
+is "S16 reapply calls rules-ensure exactly thrice (after GL's chain; after Route Guest's delete, case SG; after Route IoT's delete)" 3 "$(grep -cF 'ts-fix-ks rules-ensure' "$REAPPLY")"
 wait_ln=$(grep -nF 'pgrep -f "gl_tailscale restart"' "$REAPPLY" | cut -d: -f1)
 run_ln=$(grep -n '^# Now wait for Running state' "$REAPPLY" | cut -d: -f1)
 re_ln=$(grep -n '^/usr/bin/ts-fix-ks rules-ensure </dev/null$' "$REAPPLY" | cut -d: -f1)
@@ -4337,7 +4337,7 @@ fg_if=$(eqln "$RPC" '    if enabled then' "$fg_del")
 fg_else=$(eqln "$RPC" '    else' "$fg_if")
 fg_end=$(eqln "$RPC" '    end' "$fg_else")
 fg_call=$(lnum "$RPC" 'exec("/usr/bin/ts-fix-ks rules-ensure </dev/null >/dev/null 2>&1")' "$fg_else")
-is "SG RPC: exactly one rules-ensure in the module" 1 "$(grep -cF 'ts-fix-ks rules-ensure' "$RPC")"
+is "SG RPC: exactly two rules-ensure in the module (Route Guest's and Route IoT's)" 2 "$(grep -cF 'ts-fix-ks rules-ensure' "$RPC")"
 if [ -n "$fg_fn" ] && [ -n "$fg_del" ] && [ -n "$fg_if" ] && [ -n "$fg_else" ] && [ -n "$fg_end" ] && [ -n "$fg_call" ] &&
    [ "$fg_call" -lt "$fg_end" ]; then
     ok "SG RPC: the call follows the deletes, in the branch taken when Route Guest is off"
@@ -4402,9 +4402,9 @@ is "TS instrument lint: the fixture's calls, each classified" "1 UNBOUNDED
 11 UNBOUNDED" "$(ts_set_calls "$T/ts-set-fixture")"
 ts_calls=$(ts_set_calls "$REAPPLY")
 is "TS reapply: no unbounded or unhandled call" "" "$(printf '%s\n' "$ts_calls" | grep -e UNBOUNDED -e UNHANDLED)"
-is "TS reapply: ten calls, eight logging their failure and the reconcile's two" "8 2" \
+is "TS reapply: fifteen calls, thirteen logging their failure and the reconcile's two" "13 2" \
     "$(printf '%s\n' "$ts_calls" | grep -c ' bounded logged$') $(printf '%s\n' "$ts_calls" | grep -c ' bounded reconcile$')"
-is "TS ... and every bound is exactly timeout 10" 10 "$(grep -c 'timeout 10 /usr/sbin/tailscale set' "$REAPPLY")"
+is "TS ... and every bound is exactly timeout 10" 15 "$(grep -c 'timeout 10 /usr/sbin/tailscale set' "$REAPPLY")"
 # Every call into the CLI, reads included, in reapply and in the watchdog, which runs reapply
 # synchronously. ts_cli_calls prints "<line> <subcommand> bounded" when the text right before
 # `/usr/sbin/tailscale` is `timeout <seconds> `, else "<line> <subcommand> UNBOUNDED". Calls are
@@ -4467,13 +4467,13 @@ is "TS instrument lint, every CLI call: the fixture's calls, each classified" "1
 for f in "$REAPPLY" "$WATCHDOG"; do
     is "TS ${f##*/}: no unbounded call into the tailscale CLI" "" "$(ts_cli_calls "$f" | grep -e UNBOUNDED)"
 done
-is "TS reapply: its 17 calls by subcommand, every one bounded" "4 debug
-10 set
+is "TS reapply: its 25 calls by subcommand, every one bounded" "7 debug
+15 set
 1 status
 2 version" "$(ts_cli_calls "$REAPPLY" | grep ' bounded$' | cut -d' ' -f2 | sort | uniq -c | command awk '{ print $1, $2 }')"
 is "TS watchdog: its 4 calls by subcommand, every one bounded" "2 set
 2 status" "$(ts_cli_calls "$WATCHDOG" | grep ' bounded$' | cut -d' ' -f2 | sort | uniq -c | command awk '{ print $1, $2 }')"
-is "TS ... and every bound in both files is exactly timeout 10" "17 4" \
+is "TS ... and every bound in both files is exactly timeout 10" "25 4" \
     "$(grep -c 'timeout 10 /usr/sbin/tailscale ' "$REAPPLY") $(grep -c 'timeout 10 /usr/sbin/tailscale ' "$WATCHDOG")"
 
 echo "--- case TF: the timeout fallback line in reapply, the watchdog and the updater"

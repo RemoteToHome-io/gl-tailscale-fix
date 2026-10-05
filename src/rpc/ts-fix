@@ -160,6 +160,25 @@ local function get_guest_subnet()
     return cidr
 end
 
+-- Helper: get the IoT network as NETWORK/PREFIX for br-iot's IPv4 address, or nil. The network
+-- comes from /bin/ipcalc.sh, the tool GL's own script relies on, never from zeroing the last
+-- octet: that is right only for a /24 (192.168.10.1/23 is network 192.168.10.0/23), and a wrong
+-- network misses GL's "from <net>" rule in fix_iot_policy_route and advertises a route that is
+-- not a network address. Both values end up in "sh -c" strings: the address capture admits only
+-- digits, dots and one slash, and the result must match the CIDR pattern below or nil is returned.
+local function get_iot_subnet()
+    local data = exec("ip -4 addr show br-iot 2>/dev/null") or ""
+    local addr = data:match("inet (%d+%.%d+%.%d+%.%d+/%d+)")
+    if not addr then return nil end
+    local calc = exec("/bin/ipcalc.sh " .. addr .. " 2>/dev/null") or ""
+    local network = calc:match("NETWORK=([^\n]*)")
+    local prefix = calc:match("PREFIX=([^\n]*)")
+    if not network or not prefix then return nil end
+    local cidr = network .. "/" .. prefix
+    if not cidr:match("^%d+%.%d+%.%d+%.%d+/%d+$") then return nil end
+    return cidr
+end
+
 -- Helper: get currently advertised routes from tailscale prefs
 local function get_current_routes()
     local data = exec("/usr/sbin/tailscale debug prefs 2>/dev/null")
@@ -213,6 +232,34 @@ local function update_guest_route(enable)
     exec("/usr/sbin/tailscale set --advertise-routes=" .. routes_str .. " 2>/dev/null")
 end
 
+-- Helper: update advertised routes, adding or removing IoT subnet
+local function update_iot_route(enable)
+    local iot_subnet = get_iot_subnet()
+    if not iot_subnet then return end
+
+    local routes = get_current_routes()
+    local new_routes = {}
+    local found = false
+
+    for _, route in ipairs(routes) do
+        if route == iot_subnet then
+            found = true
+            if enable then
+                new_routes[#new_routes + 1] = route
+            end
+        else
+            new_routes[#new_routes + 1] = route
+        end
+    end
+
+    if enable and not found then
+        new_routes[#new_routes + 1] = iot_subnet
+    end
+
+    local routes_str = table.concat(new_routes, ",")
+    exec("/usr/sbin/tailscale set --advertise-routes=" .. routes_str .. " 2>/dev/null")
+end
+
 -- Helper: set guest→tailscale firewall forwardings enabled/disabled
 local function set_guest_ts_fw(enabled)
     local c = uci.cursor()
@@ -221,6 +268,37 @@ local function set_guest_ts_fw(enabled)
     local forwardings = {
         {name = "ts_fix_guest2ts", src = "guest", dest = "tailscale0"},
         {name = "ts_fix_ts2guest", src = "tailscale0", dest = "guest"},
+    }
+
+    for _, fwd in ipairs(forwardings) do
+        local exists = c:get(FW_CONFIG, fwd.name)
+        if exists and not enabled then
+            c:delete(FW_CONFIG, fwd.name)
+            changed = true
+        elseif not exists and enabled then
+            c:set(FW_CONFIG, fwd.name, "forwarding")
+            c:set(FW_CONFIG, fwd.name, "src", fwd.src)
+            c:set(FW_CONFIG, fwd.name, "dest", fwd.dest)
+            changed = true
+        end
+    end
+
+    if changed then
+        c:commit(FW_CONFIG)
+        ngx.pipe.spawn({"/etc/init.d/firewall", "reload"})
+    end
+
+    return changed
+end
+
+-- Helper: set iot→tailscale firewall forwardings enabled/disabled
+local function set_iot_ts_fw(enabled)
+    local c = uci.cursor()
+    local changed = false
+
+    local forwardings = {
+        {name = "ts_fix_iot2ts", src = "iot", dest = "tailscale0"},
+        {name = "ts_fix_ts2iot", src = "tailscale0", dest = "iot"},
     }
 
     for _, fwd in ipairs(forwardings) do
@@ -388,6 +466,30 @@ local function fix_guest_policy_route(enabled)
     end
 end
 
+-- Helper: fix IoT subnet policy route for exit node compatibility. Mirrors
+-- fix_guest_policy_route above, against br-iot: GL's gl_tailscale adds
+-- "from <iot_subnet> lookup main" at priority 0 whenever a Custom Exit Node is
+-- set and the IoT network is enabled, which routes all IoT client traffic to
+-- the main table → WAN, bypassing the exit node and the kill switch's routing
+-- layer. Replaced with the destination-based "to <iot_subnet> table main".
+-- Since v1.0.22 the kill switch covers iot (its engine's source-rule swap keeps
+-- this same rule in place of GL's "from" rule), so the disabled path re-asserts
+-- the engine's layer the same way the guest path does.
+local function fix_iot_policy_route(enabled)
+    local iot_subnet = get_iot_subnet()
+    if not iot_subnet then return end
+
+    -- Always clean up both rule types to avoid duplicates
+    exec("ip rule del from " .. iot_subnet .. " lookup main 2>/dev/null")
+    exec("ip rule del to " .. iot_subnet .. " table main 2>/dev/null")
+
+    if enabled then
+        exec("ip rule add to " .. iot_subnet .. " table main priority 0")
+    else
+        exec("/usr/bin/ts-fix-ks rules-ensure </dev/null >/dev/null 2>&1")
+    end
+end
+
 -- Firmware detection — on GL 4.9+, some features overlap with GL's native
 -- Tailscale enhancements. We keep the plugin fully active but hide UI for
 -- features GL provides natively (Advertise Exit Node) and skip the
@@ -442,6 +544,7 @@ function M.get_config()
     res.advertise_exit_node = c:get(TS_FIX_CONFIG, "settings", "advertise_exit_node") == "1"
     res.kill_switch = c:get(TS_FIX_CONFIG, "settings", "kill_switch") == "1"
     res.route_guest = c:get(TS_FIX_CONFIG, "settings", "route_guest") == "1"
+    res.route_iot = c:get(TS_FIX_CONFIG, "settings", "route_iot") == "1"
     res.tailscale_ssh = c:get(TS_FIX_CONFIG, "settings", "tailscale_ssh") == "1"
     res.ks_follow_exit_node = c:get(TS_FIX_CONFIG, "settings", "ks_follow_exit_node") == "1"
     res.hide_ts_domain = c:get(TS_FIX_CONFIG, "settings", "hide_ts_domain") == "1"
@@ -535,6 +638,9 @@ function M.get_config()
     -- Guest routing firewall forwarding state
     res.route_guest_fw_active = c:get(FW_CONFIG, "ts_fix_guest2ts") ~= nil
 
+    -- IoT routing firewall forwarding state
+    res.route_iot_fw_active = c:get(FW_CONFIG, "ts_fix_iot2ts") ~= nil
+
     -- Tailscale0 zone masquerade state — reported active only when BOTH
     -- families' masquerade are set (mirrors kill_switch_fw_active semantics;
     -- a torn state surfaces in the UI rather than silently claiming
@@ -553,6 +659,7 @@ end
     @in  bool  ?advertise_exit_node   Enable/disable exit node advertisement
     @in  bool  ?kill_switch           Enable/disable kill switch
     @in  bool  ?route_guest           Enable/disable guest network routing via Tailscale
+    @in  bool  ?route_iot             Enable/disable IoT network routing via Tailscale
     @in  bool  ?tailscale_ssh         Enable/disable Tailscale SSH server
     @in  bool  ?ks_follow_exit_node   Kill switch mirrors GL's Custom Exit Node setting (watchdog-enforced)
     @in  bool  ?hide_ts_domain        Stop advertising the tailnet search domain to LAN clients
@@ -629,6 +736,14 @@ function M.set_config(params)
         route_changed = true
     end
 
+    -- Handle route_iot
+    if params.route_iot ~= nil then
+        local val = params.route_iot and "1" or "0"
+        c:set(TS_FIX_CONFIG, "settings", "route_iot", val)
+        set_iot_ts_fw(params.route_iot)
+        route_changed = true
+    end
+
     -- Handle tailscale_ssh
     if params.tailscale_ssh ~= nil then
         local val = params.tailscale_ssh and "1" or "0"
@@ -695,7 +810,7 @@ function M.set_config(params)
         end
     end
 
-    -- Apply route changes (only when route_guest was actually changed)
+    -- Apply route changes (only when route_guest or route_iot was actually changed)
     if route_changed then
         local rg = c:get(TS_FIX_CONFIG, "settings", "route_guest") == "1"
         update_guest_route(rg)
@@ -703,6 +818,11 @@ function M.set_config(params)
         -- node) with "to <guest>" (allows it). Must run after
         -- update_guest_route which triggers Tailscale to create its rules.
         fix_guest_policy_route(rg)
+
+        local ri = c:get(TS_FIX_CONFIG, "settings", "route_iot") == "1"
+        update_iot_route(ri)
+        -- Same policy route fixup for the IoT subnet.
+        fix_iot_policy_route(ri)
     end
 
     -- Ensure tailscale0 zone masquerade (defense-in-depth for subnet routing +

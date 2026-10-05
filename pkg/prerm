@@ -200,12 +200,25 @@ else
     logger -t ts-fix "prerm: guest_net helper not found in /usr/bin/ts-fix-reapply - guest route fixup (to <guest net> table main) not removed"
 fi
 
-# Remove guest routing firewall forwardings, the kill switch's lan -> tailscale0 tunnel path,
+# Remove IoT subnet policy route fixup. The IoT network comes from reapply's own tested helper
+# (iot_net: ipcalc.sh, right for any prefix length — zeroing the last octet is right only for a
+# /24 and misses the rule on any other IoT network). It is loaded from the installed reapply,
+# which opkg deletes only after this script, rather than copied here. The eval runs nothing but
+# the marked helper block of our own root-owned package file.
+eval "$(awk '/^# ---8<--- iot_net/,/^# ---8<--- end iot_net/' /usr/bin/ts-fix-reapply 2>/dev/null)"
+if command -v iot_net >/dev/null 2>&1; then
+    _iot=$(iot_net)
+    [ -n "$_iot" ] && ip rule del to "$_iot" table main 2>/dev/null
+else
+    logger -t ts-fix "prerm: iot_net helper not found in /usr/bin/ts-fix-reapply - IoT route fixup (to <iot net> table main) not removed"
+fi
+
+# Remove guest and IoT routing firewall forwardings, the kill switch's lan -> tailscale0 tunnel path,
 # and legacy kill switch rules. ts_fix_lan2ts is normally dropped by the disarm above (only when
 # the engine recorded creating it); this catches the case where disarm never ran or did not
 # finish. The name is ours — GL's own lan -> tailscale0 forwarding is a different section and is
 # not reachable by this delete.
-for section in ts_fix_guest2ts ts_fix_ts2guest ts_fix_lan2ts ts_ks_lan2wan ts_ks_guest2wan; do
+for section in ts_fix_guest2ts ts_fix_ts2guest ts_fix_iot2ts ts_fix_ts2iot ts_fix_lan2ts ts_ks_lan2wan ts_ks_guest2wan; do
     uci -q delete firewall."$section" 2>/dev/null
 done
 
