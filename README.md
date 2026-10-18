@@ -401,7 +401,7 @@ Found a bug? Have a feature request? Tested on a new router model?
 - **Pull requests**: Welcome. The plugin is pure Lua, shell, and vanilla JS — no build toolchain required. See [Architecture](#architecture) for how the pieces fit together.
 - **Model testing**: If you verify gl-tailscale-fix on a GL.iNet model not in the [tested models](#tested-models) table, please open an issue with your model, firmware version, and test results.
 
-- **Release timing**: Please be understanding this project is maintained out of limited personal time.  Each release takes a *minimum* of 10 hours running live bench testing across router models.  This includes re-configuring and wiring up multiple routers and laptops to do live leak testing of all the potential data paths.  Security testing is done with hands-on configuration and live testing/monitoring, not AI simulations.  As a security-focused plugin, no new features make it in without a new full-suite bench test cycle.
+- **Release timing**: Please be kind. This project is maintained out of limited personal time.  Each release takes a *minimum of 10 hours* running live bench testing across router models - that is after the coding time.  This includes re-configuring and wiring up multiple routers and laptops to do live leak testing of all the potential data paths.  Security testing is done with hands-on configuration and live hardware testing/monitoring, not AI simulations.  As a security-focused plugin, no new features make it in without a new full-suite bench test cycle.
 
 ## Attribution
 
