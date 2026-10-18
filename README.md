@@ -401,14 +401,14 @@ Found a bug? Have a feature request? Tested on a new router model?
 - **Pull requests**: Welcome. The plugin is pure Lua, shell, and vanilla JS — no build toolchain required. See [Architecture](#architecture) for how the pieces fit together.
 - **Model testing**: If you verify gl-tailscale-fix on a GL.iNet model not in the [tested models](#tested-models) table, please open an issue with your model, firmware version, and test results.
 
-- Please be understanding on release timing & feature requests.  This project is maintained out of limited personal time.  Each release takes a minimum of 10 hours running live bench testing across router models.  This includes re-configuring and wiring up multiple routers and laptops to do life leak testing of all the potential data paths.  Security testing is done with hands-on configuration and life testing/monitoriing, not AI simulations.
+- **Release timing**: Please be understanding this project is maintained out of limited personal time.  Each release takes a *minimum* of 10 hours running live bench testing across router models.  This includes re-configuring and wiring up multiple routers and laptops to do live leak testing of all the potential data paths.  Security testing is done with hands-on configuration and live testing/monitoring, not AI simulations.  As a security-focused plugin, no new features make it in without a new full-suite bench test cycle.
 
 ## Attribution
 
 - Tailscale combined binaries from [glinet-tailscale-updater](https://github.com/Admonstrator/glinet-tailscale-updater) by @Admonstrator
 - [TheWiredNomad](https://thewirednomad.com/) for feedback and testing
 - Beta testers and feedback from the GL.iNet community
-- Claude for hashing out the Lua/frontend, docs and code reviews & Chat for adversarial security testing. This project started as a hand-built internal tool for helping secure our RTH consulting customers, but we have obviously embraced AI (with human code review) to enhance and extend, making the UI user-friendly enough to become a public offering. 
+- Claude for hashing out the Lua/frontend, docs and code reviews & Chat for adversarial security testing. This project started as a hand-built internal tool for helping secure our RTH consulting customers, but we have obviously embraced AI (with human code review) as it's evolved to enhance and extend, making the UI user-friendly enough to become a public offering. 
 
 ## License
 
