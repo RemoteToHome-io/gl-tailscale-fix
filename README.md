@@ -408,7 +408,7 @@ Found a bug? Have a feature request? Tested on a new router model?
 - Tailscale combined binaries from [glinet-tailscale-updater](https://github.com/Admonstrator/glinet-tailscale-updater) by @Admonstrator
 - [TheWiredNomad](https://thewirednomad.com/) for feedback and testing
 - Beta testers and feedback from the GL.iNet community
-- Claude for hashing out the Lua/frontend, docs and code reviews & Chat for adversarial security testing. This project started as a hand-built internal tool for helping secure RTH Consulting's customers using TS, but we have obviously embraced AI (with human code review) as it's evolved to enhance and extend, making the UI user-friendly enough to become a public offering. 
+- Claude for hashing out the Lua/frontend, docs and code reviews & Chat for adversarial security testing. This project started as a hand-built internal tool for helping secure RTH Consulting's customers using TS, but we have obviously embraced AI as it's evolved to enhance and extend (with human code review), making the UI now user-friendly enough to be a public offering. 
 
 ## License
 
