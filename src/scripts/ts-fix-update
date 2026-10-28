@@ -13,8 +13,9 @@ LOCK="/tmp/ts-fix-update.lock"
 STATUS="/tmp/ts-fix-update.status"
 CACHE="/tmp/ts-fix-latest-version"
 PLUGIN_CACHE="/tmp/ts-fix-plugin-latest-version"
-# The binary, service and keep-list paths can be overridden from the environment so that
-# tests/unit/test-keep-binary.sh can point them into a temp dir; nothing sets them in production.
+# The binary, service, keep-list and reference-binary paths can be overridden from the environment
+# so that tests/unit/test-keep-binary.sh and tests/unit/test-arch-select.sh can point them into a
+# temp dir; nothing sets them in production.
 TS_BIN=${TS_BIN:-/usr/sbin/tailscale}
 TS_DAEMON=${TS_DAEMON:-/usr/sbin/tailscaled}
 TS_INIT=${TS_INIT:-/etc/init.d/tailscale}
@@ -22,6 +23,8 @@ TS_INIT=${TS_INIT:-/etc/init.d/tailscale}
 ROM_PREFIX=${ROM_PREFIX:-/rom}
 # Second keep list, present only while a Version Manager binary is installed (see keep_write)
 KEEP_BIN=${KEEP_BIN:-/lib/upgrade/keep.d/gl-tailscale-fix-tailscale}
+# A binary this router runs: its ELF header gives the router's byte order (see elf_order)
+REF_ELF=${REF_ELF:-/bin/busybox}
 SYSUPGRADE_CONF="/etc/sysupgrade.conf"
 
 # Combined multi-call binaries hosted by Admonstrator
@@ -30,12 +33,33 @@ SYSUPGRADE_CONF="/etc/sysupgrade.conf"
 # that are too large for flash-constrained routers)
 TINY_URL="https://github.com/Admonstrator/glinet-tailscale-updater/releases/latest/download"
 
+# elf_order <file>: "le" or "be" from byte 5 of <file>'s ELF header (EI_DATA: 1 little-endian,
+# 2 big-endian), or nothing when <file> is missing, unreadable or not ELF. Byte 4 (EI_CLASS) may be
+# 1 or 2. Bytes 0-5 of an ELF file hold no NUL, which $( ) would drop. dd, not od: the GL builds
+# checked have no od.
+elf_order() {
+    local h
+    h=$(dd if="$1" bs=1 count=6 2>/dev/null) || h=""
+    case "$h" in
+        "$(printf '\177ELF\001\001')"|"$(printf '\177ELF\002\001')") echo "le" ;;
+        "$(printf '\177ELF\001\002')"|"$(printf '\177ELF\002\002')") echo "be" ;;
+    esac
+}
+
 # Architecture mapping (matches Admonstrator's release naming)
 detect_arch() {
     case "$(uname -m)" in
         aarch64)    echo "arm64" ;;
         armv7l)     echo "arm" ;;
-        mips)       echo "mips" ;;
+        # A 32-bit MIPS kernel reports "mips" for both byte orders, so take the order from a
+        # binary this router runs: a little-endian MT7621 (GL-MG1300) needs mipsle, not mips.
+        mips)
+            case "$(elf_order "$REF_ELF")" in
+                le) echo "mipsle" ;;
+                be) echo "mips" ;;
+                *)  echo "" ;;
+            esac
+            ;;
         mipsel)     echo "mipsle" ;;
         x86_64)     echo "amd64" ;;
         *)          echo "" ;;
@@ -104,6 +128,71 @@ install_binary() {
     chmod 755 "$TS_DAEMON"
     ln -sf tailscaled "$TS_BIN"
     keep_write || true
+}
+
+# check_download <file>: return if <file> is ELF with the byte order of REF_ELF; otherwise delete
+# it, set an error status and exit 1, before anything installed is touched. Only the byte order is
+# compared: the kernel's ELF loader refuses a binary in the other order, and uname cannot tell the
+# order on MIPS. A binary that cannot run for another reason is left to the version check after
+# install. A REF_ELF that cannot be read as ELF fails the check rather than skipping it.
+check_download() {
+    local want
+    want=$(elf_order "$REF_ELF")
+    if [ -n "$want" ] && [ "$(elf_order "$1")" = "$want" ]; then
+        return 0
+    fi
+    rm -f "$1"
+    set_status "error" "Downloaded binary does not match this router - nothing was changed"
+    exit 1
+}
+
+# Put the factory binaries from ROM_PREFIX back and restart Tailscale: used by Restore and by the
+# rollback of an install whose new binary prints no version. Callers check the factory tailscaled
+# exists.
+restore_factory() {
+    # Stop tailscale
+    "$TS_INIT" stop 2>/dev/null || true
+    sleep 1
+
+    # Restore from /rom/ (factory has tailscale as symlink to tailscaled —
+    # cp -a preserves symlinks, so this recreates the factory layout)
+    rm -f "$TS_BIN" "$TS_DAEMON"
+    cp -a "${ROM_PREFIX}${TS_BIN}" "$TS_BIN"
+    cp -a "${ROM_PREFIX}${TS_DAEMON}" "$TS_DAEMON"
+    chmod 755 "$TS_DAEMON"
+
+    # The restored binaries equal the firmware's, so they must not be kept across a firmware
+    # upgrade: the next firmware brings its own. Stop listing them.
+    keep_remove || true
+
+    # Clean up stale sysupgrade.conf entries (v1.0.18+ uses keep.d)
+    if [ -f "$SYSUPGRADE_CONF" ]; then
+        sed -i "\|^${TS_BIN}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
+        sed -i "\|^${TS_DAEMON}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
+    fi
+
+    # Restart
+    "$TS_INIT" start 2>/dev/null || true
+    sleep 3
+}
+
+# rollback_install <version>: the binary just installed printed no version, so it is treated as not
+# running on this router. Put the factory binaries back, set an error status, exit 1.
+rollback_install() {
+    if [ ! -f "${ROM_PREFIX}${TS_DAEMON}" ]; then
+        set_status "error" "Tailscale $1 did not run on this router and no factory binary was found to restore"
+        exit 1
+    fi
+    set_status "running" "Restoring factory version..."
+    # Called with || so set -e does not apply inside: a failed step cannot leave Tailscale stopped
+    # halfway through. The comparison then reports whether the factory binaries are back.
+    restore_factory || true
+    if cmp -s "${ROM_PREFIX}${TS_DAEMON}" "$TS_DAEMON" && cmp -s "${ROM_PREFIX}${TS_BIN}" "$TS_BIN"; then
+        set_status "error" "Tailscale $1 did not run on this router - factory version restored"
+    else
+        set_status "error" "Tailscale $1 did not run on this router and the factory version could not be restored"
+    fi
+    exit 1
 }
 
 # -- Sync-keep mode: converge KEEP_BIN on what is installed (run by postinst) --
@@ -256,6 +345,9 @@ do_install() {
         exit 1
     fi
 
+    # Refuse a binary this router cannot run while the installed one is still untouched
+    check_download "$tmpfile"
+
     set_status "running" "Installing binaries..."
 
     # Stop tailscale
@@ -284,7 +376,10 @@ do_install() {
     local new_ver
     new_ver=$($TS_BIN version 2>/dev/null | head -1 | awk '{print $1}') || true
 
-    set_status "success" "Updated to ${new_ver:-$ver_raw}"
+    # No version: treat the new binary as not running here and put the factory one back
+    [ -n "$new_ver" ] || rollback_install "$latest_ver"
+
+    set_status "success" "Updated to ${new_ver}"
 }
 
 # -- Restore mode: restore factory binaries --
@@ -302,30 +397,7 @@ do_restore() {
         exit 1
     fi
 
-    # Stop tailscale
-    "$TS_INIT" stop 2>/dev/null || true
-    sleep 1
-
-    # Restore from /rom/ (factory has tailscale as symlink to tailscaled —
-    # cp -a preserves symlinks, so this recreates the factory layout)
-    rm -f "$TS_BIN" "$TS_DAEMON"
-    cp -a "${ROM_PREFIX}${TS_BIN}" "$TS_BIN"
-    cp -a "${ROM_PREFIX}${TS_DAEMON}" "$TS_DAEMON"
-    chmod 755 "$TS_DAEMON"
-
-    # The restored binaries equal the firmware's, so they must not be kept across a firmware
-    # upgrade: the next firmware brings its own. Stop listing them.
-    keep_remove || true
-
-    # Clean up stale sysupgrade.conf entries (v1.0.18+ uses keep.d)
-    if [ -f "$SYSUPGRADE_CONF" ]; then
-        sed -i "\|^${TS_BIN}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
-        sed -i "\|^${TS_DAEMON}$|d" "$SYSUPGRADE_CONF" 2>/dev/null
-    fi
-
-    # Restart
-    "$TS_INIT" start 2>/dev/null || true
-    sleep 3
+    restore_factory
 
     local ver
     ver=$($TS_BIN version 2>/dev/null | head -1 | awk '{print $1}')
@@ -335,8 +407,9 @@ do_restore() {
 
 # -- Main --
 
-# Library guard: tests/unit/test-keep-binary.sh sources this file with TS_FIX_UPDATE_LIB=1 to get
-# the functions above without running a mode. Never set in production.
+# Library guard: tests/unit/test-keep-binary.sh and tests/unit/test-arch-select.sh source this file
+# with TS_FIX_UPDATE_LIB=1 to get the functions above without running a mode. Never set in
+# production.
 [ "${TS_FIX_UPDATE_LIB:-0}" = "1" ] && return 0
 
 case "$1" in

@@ -256,9 +256,12 @@ is "S3 ... and do_install no longer moves the download into place itself" "0" \
 is "S4 install_binary: keep_write only once the binary and the symlink are in place" "in order" \
     "$(in_order "$UPD" install_binary '    mv "$1" "$TS_DAEMON"' '    chmod 755 "$TS_DAEMON"' \
         '    ln -sf tailscaled "$TS_BIN"' '    keep_write || true')"
-is "S5 do_restore: keep_remove only once the factory binaries are copied back, before the restart" "in order" \
-    "$(in_order "$UPD" do_restore '    cp -a "${ROM_PREFIX}${TS_BIN}" "$TS_BIN"' \
+# The restore steps live in restore_factory, which do_restore calls (as does the rollback of an
+# install whose new binary prints no version; tests/unit/test-arch-select.sh covers that).
+is "S5 restore_factory: keep_remove only once the factory binaries are copied back, before the restart" "in order" \
+    "$(in_order "$UPD" restore_factory '    cp -a "${ROM_PREFIX}${TS_BIN}" "$TS_BIN"' \
         '    cp -a "${ROM_PREFIX}${TS_DAEMON}" "$TS_DAEMON"' '    keep_remove || true' '    "$TS_INIT" start 2>/dev/null || true')"
+is "S5 ... and do_restore runs restore_factory once" "in order" "$(in_order "$UPD" do_restore '    restore_factory')"
 is "S6 the dispatch has a --sync-keep mode" "1" \
     "$(grep -c -x -F -e '    --sync-keep)     do_sync_keep ;;' "$UPD")"
 TS_FIX_UPDATE_LIB=0 TS_BIN="$TSB" TS_DAEMON="$TSD" TS_INIT="$T/init" ROM_PREFIX="$T/rom" KEEP_BIN="$KB" \
