@@ -94,7 +94,7 @@ Download the latest `.ipk` from [Releases](https://github.com/RemoteToHome-io/gl
 SSH into your router and run:
 
 ```sh
-wget -q https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/latest/download/install-gl-tailscale-fix.sh -O install-gl-tailscale-fix.sh && sh install-gl-tailscale-fix.sh
+curl -fsSL -o install-gl-tailscale-fix.sh https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/latest/download/install-gl-tailscale-fix.sh && sh install-gl-tailscale-fix.sh
 ```
 
 The installer downloads the latest `.ipk`, verifies the sha256 checksum, and runs `opkg install`. It also automatically restores the stock `gl_tailscale` wrapper if you previously modified it for exit node support.
@@ -135,7 +135,7 @@ v1.0.21 package installed cleanly there). GL's web uploader rejects unsigned pac
 over SSH:
 
 ```sh
-wget -O /tmp/gl-tailscale-fix.apk https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/download/v1.0.22/gl-tailscale-fix-1.0.22-beta-untested.apk
+curl -fsSL -o /tmp/gl-tailscale-fix.apk https://github.com/RemoteToHome-io/gl-tailscale-fix/releases/download/v1.0.22/gl-tailscale-fix-1.0.22-beta-untested.apk
 apk add --allow-untrusted /tmp/gl-tailscale-fix.apk
 ```
 

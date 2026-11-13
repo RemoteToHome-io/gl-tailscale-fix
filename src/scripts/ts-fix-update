@@ -13,6 +13,11 @@ LOCK="/tmp/ts-fix-update.lock"
 STATUS="/tmp/ts-fix-update.status"
 CACHE="/tmp/ts-fix-latest-version"
 PLUGIN_CACHE="/tmp/ts-fix-plugin-latest-version"
+# --check and --check-plugin each run one at a time (see do_check); a failed --check leaves
+# CHECK_FAIL for the RPC
+CHECK_LOCK="/tmp/ts-fix-check.lock"
+PLUGIN_CHECK_LOCK="/tmp/ts-fix-check-plugin.lock"
+CHECK_FAIL="/tmp/ts-fix-latest-version.failed"
 # The binary, service, keep-list and reference-binary paths can be overridden from the environment
 # so that tests/unit/test-keep-binary.sh and tests/unit/test-arch-select.sh can point them into a
 # temp dir; nothing sets them in production.
@@ -25,6 +30,9 @@ ROM_PREFIX=${ROM_PREFIX:-/rom}
 KEEP_BIN=${KEEP_BIN:-/lib/upgrade/keep.d/gl-tailscale-fix-tailscale}
 # A binary this router runs: its ELF header gives the router's byte order (see elf_order)
 REF_ELF=${REF_ELF:-/bin/busybox}
+# The downloaders fetch runs, overridable the same way for tests/unit/test-fetch.sh
+CURL_BIN=${CURL_BIN:-curl}
+WGET_BIN=${WGET_BIN:-wget}
 SYSUPGRADE_CONF="/etc/sysupgrade.conf"
 
 # Combined multi-call binaries hosted by Admonstrator
@@ -32,6 +40,26 @@ SYSUPGRADE_CONF="/etc/sysupgrade.conf"
 # (standard pkgs.tailscale.com tarballs ship separate non-multi-call binaries
 # that are too large for flash-constrained routers)
 TINY_URL="https://github.com/Admonstrator/glinet-tailscale-updater/releases/latest/download"
+
+# fetch <url> <dest> <seconds>: download <url> to the file <dest>, or to stdout when <dest> is -,
+# within <seconds>; returns the downloader's status. GL's wget is uclient-fetch, which cannot read a
+# response header line longer than its 4 KB read buffer and waits for its timeout instead (measured
+# on a GL-AXT1800 4.8.4, 2026-11-12); GitHub's release-download redirects carry a 4,175-byte one,
+# counting its line ending. So curl is used whenever it is installed, not after wget fails, which
+# would cost the whole timeout; and wget is not tried after curl fails, since a network failure
+# fails both.
+fetch() {
+    local url="$1" dest="$2" secs="$3"
+    if command -v "$CURL_BIN" >/dev/null 2>&1; then
+        if [ "$dest" = "-" ]; then
+            timeout "$secs" "$CURL_BIN" -fsSL --connect-timeout 15 --max-time $((secs - 5)) "$url"
+        else
+            timeout "$secs" "$CURL_BIN" -fsSL --connect-timeout 15 --max-time $((secs - 5)) -o "$dest" "$url"
+        fi
+    else
+        timeout "$secs" "$WGET_BIN" -T 30 -qO "$dest" "$url"
+    fi
+}
 
 # elf_order <file>: "le" or "be" from byte 5 of <file>'s ELF header (EI_DATA: 1 little-endian,
 # 2 big-endian), or nothing when <file> is missing, unreadable or not ELF. Byte 4 (EI_CLASS) may be
@@ -216,11 +244,15 @@ do_sync_keep() {
 # -- Check mode: query latest version and cache it --
 
 do_check() {
+    # One check at a time: the page asks for the version every 3 s while it reads "checking...",
+    # and every request made without a cache started another check. A second one returns at once.
+    exec 201>"$CHECK_LOCK"
+    flock -n 201 || return 0
+
     local latest
-    # Bounded fetch: -T covers connect/read stalls (GL's wget is uclient-fetch),
-    # the outer timeout caps total time — a crawling-but-alive transfer trips
-    # neither -T nor a read timeout on its own.
-    latest=$(timeout 60 wget -T 30 -qO- "$TINY_URL/version.txt" 2>/dev/null | head -1 | tr -d '\r') || true
+    # Bounded fetch: the whole transfer is capped at 60 s, since a crawling-but-alive
+    # transfer trips neither a connect nor a read timeout on its own.
+    latest=$(fetch "$TINY_URL/version.txt" - 60 2>/dev/null | head -1 | tr -d '\r') || true
 
     if [ -n "$latest" ]; then
         # Cache the FULL version string (e.g. "1.98.8-tiny.by.admon.1320").
@@ -229,14 +261,22 @@ do_check() {
         # what distinguishes a fixed rebuild from a buggy install. The RPC
         # compares full strings and derives the display base itself.
         echo "$latest" > "$CACHE"
+        rm -f "$CHECK_FAIL"
+    else
+        # Tells the RPC to stop starting checks for a while; a cache keeps its last good value
+        : > "$CHECK_FAIL"
     fi
 }
 
 # -- Check plugin mode: query latest gl-tailscale-fix release from GitHub --
 
 do_check_plugin() {
+    # One at a time, as do_check
+    exec 202>"$PLUGIN_CHECK_LOCK"
+    flock -n 202 || return 0
+
     local api_response
-    api_response=$(timeout 60 wget -T 30 -qO- "https://api.github.com/repos/RemoteToHome-io/gl-tailscale-fix/releases/latest" 2>/dev/null) || true
+    api_response=$(fetch "https://api.github.com/repos/RemoteToHome-io/gl-tailscale-fix/releases/latest" - 60 2>/dev/null) || true
 
     if [ -z "$api_response" ]; then
         # Private repo, network error, or rate limit — write empty to indicate checked but unavailable
@@ -260,8 +300,12 @@ do_check_plugin() {
 # -- Install mode: download and install latest Tailscale --
 
 do_install() {
-    exec 200>"$LOCK"
+    # Opened for append, so a run that then finds the lock taken leaves the holder's PID alone; the
+    # PID tells the RPC a running holder from a lock file a killed run left behind, and is written,
+    # replacing anything a killed run left, only once the lock is ours.
+    exec 200>>"$LOCK"
     flock -n 200 || { echo "Update already running"; exit 1; }
+    echo $$ > "$LOCK"
     trap 'cleanup; exit 1' TERM INT
     trap cleanup EXIT
 
@@ -280,7 +324,7 @@ do_install() {
     # the -tiny.by.admon.NNNN build suffix (verified live: version.txt serves
     # the full string)
     local ver_raw latest_ver
-    ver_raw=$(timeout 60 wget -T 30 -qO- "$TINY_URL/version.txt" 2>/dev/null | head -1 | tr -d '\r') || true
+    ver_raw=$(fetch "$TINY_URL/version.txt" - 60 2>/dev/null | head -1 | tr -d '\r') || true
     if [ -z "$ver_raw" ]; then
         set_status "error" "Failed to check latest version"
         exit 1
@@ -326,11 +370,11 @@ do_install() {
     local tmpfile="/tmp/$binary"
 
     rm -f "$tmpfile"
-    # Bounded download: -T catches connect/read stalls, the outer timeout caps
-    # total transfer time. A healthy pull is ~6MB in well under a minute; a
+    # Bounded download: a connect stall fails early, and the whole transfer is
+    # capped at 300 s. A healthy pull is ~6MB in well under a minute; a
     # degraded path that would otherwise crawl indefinitely dies here with a
     # clean error instead of leaving the UI spinner stuck (observed 2026-07-05).
-    if ! timeout 300 wget -T 30 -qO "$tmpfile" "$url" 2>/dev/null; then
+    if ! fetch "$url" "$tmpfile" 300 2>/dev/null; then
         rm -f "$tmpfile"
         set_status "error" "Download failed or timed out"
         exit 1
@@ -385,8 +429,10 @@ do_install() {
 # -- Restore mode: restore factory binaries --
 
 do_restore() {
-    exec 200>"$LOCK"
+    # Opened for append and the PID written once the lock is ours, as in do_install
+    exec 200>>"$LOCK"
     flock -n 200 || { echo "Operation already running"; exit 1; }
+    echo $$ > "$LOCK"
     trap 'cleanup; exit 1' TERM INT
     trap cleanup EXIT
 
@@ -407,9 +453,9 @@ do_restore() {
 
 # -- Main --
 
-# Library guard: tests/unit/test-keep-binary.sh and tests/unit/test-arch-select.sh source this file
-# with TS_FIX_UPDATE_LIB=1 to get the functions above without running a mode. Never set in
-# production.
+# Library guard: tests/unit/test-keep-binary.sh, tests/unit/test-arch-select.sh and
+# tests/unit/test-fetch.sh source this file with TS_FIX_UPDATE_LIB=1 to get the functions above
+# without running a mode. Never set in production.
 [ "${TS_FIX_UPDATE_LIB:-0}" = "1" ] && return 0
 
 case "$1" in

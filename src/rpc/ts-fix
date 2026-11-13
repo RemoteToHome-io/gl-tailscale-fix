@@ -81,19 +81,68 @@ local function get_ts_version_full()
     return cached_ts_version_full
 end
 
--- Helper: check if a cache file is stale (older than CACHE_TTL seconds)
--- Uses "date -r" (BusyBox) since GL routers don't have stat in PATH.
--- Array-form spawn avoids shell interpolation of path.
+-- Helper: seconds since a file was last modified, or nil when its mtime cannot be read.
+-- Uses file_mtime's "date -r" spawn (array form, so the path is never interpolated by a shell).
+local function file_age(path)
+    local mtime = file_mtime(path)
+    if mtime == 0 then return nil end
+    return ngx.time() - mtime
+end
+
+-- Helper: check if a cache file is stale (older than CACHE_TTL seconds); a missing file, or one
+-- whose mtime cannot be read, is stale.
 local function is_cache_stale(path)
     if not fs.access(path) then return true end
-    local r = ngx.pipe.spawn({"date", "-r", path, "+%s"})
-    if not r then return true end
-    local mtime_str = r:stdout_read_all()
-    r:wait()
-    if not mtime_str then return true end
-    local mtime = tonumber(mtime_str:match("^(%d+)"))
-    if not mtime then return true end
-    return (ngx.time() - mtime) >= CACHE_TTL
+    local age = file_age(path)
+    return age == nil or age >= CACHE_TTL
+end
+
+-- Helper: start /usr/bin/ts-fix-update in the background with one of its mode flags. Detached
+-- through "sh -c '... &'", as set_config starts the kill-switch engine. GL replaces ngx.pipe
+-- (/usr/share/gl-ngx/oui-init.lua): each spawn is run by gl-ngx-session's command proxy, which
+-- reads the command's stdout for up to 10 s, waits up to 10 s more, then SIGKILLs it (same code in
+-- GL 4.8.4 and 4.9.0). A ts-fix-update started directly was killed 15-21 s in (measured on a
+-- GL-AXT1800 4.8.4, 2026-11-12), so a killed install or restore never cleared its lock or its
+-- "running" status. Now the process the proxy waits on is the short-lived sh, which exits at once;
+-- the updater writes nothing to its stdout and is reparented to init. Only these literal flags
+-- ever reach the shell.
+local UPDATE_FLAGS = {
+    ["--check"] = true, ["--check-plugin"] = true, ["--install"] = true, ["--restore"] = true,
+}
+local function spawn_update(flag)
+    if not UPDATE_FLAGS[flag] then
+        ngx.log(ngx.ERR, "ts-fix: refusing to start ts-fix-update with an unknown mode")
+        return
+    end
+    ngx.pipe.spawn({"sh", "-c", "/usr/bin/ts-fix-update " .. flag .. " </dev/null >/dev/null 2>&1 &"})
+end
+
+-- Helper: true while a ts-fix-update --install or --restore holds its lock. The updater writes its
+-- PID into the lock file once it holds it, so a file left behind by a killed run reads as free: no
+-- PID in it, or the PID of a process that is gone or is no longer the updater. Reads /proc only,
+-- no spawn.
+local function update_holder_alive()
+    local f = io.open("/tmp/ts-fix-update.lock", "r")
+    if not f then return false end
+    local pid = f:read("*l")
+    f:close()
+    if not pid or not pid:match("^%d+$") then return false end
+    local c = io.open("/proc/" .. pid .. "/cmdline", "r")
+    if not c then return false end
+    local cmdline = c:read("*a")
+    c:close()
+    return cmdline ~= nil and cmdline:find("ts-fix-update", 1, true) ~= nil
+end
+
+-- Helper: a fresh "running" status, in the form ts-fix-update's set_status writes, for do_update
+-- and do_restore to write before they spawn, so the page's first poll does not read the last run's
+-- result. A failed write is left to the updater, which writes its own status at once.
+local function mark_update_starting()
+    local f = io.open("/tmp/ts-fix-update.status", "w")
+    if f then
+        f:write('{"status":"running","message":"Starting..."}')
+        f:close()
+    end
 end
 
 -- Helper: run a command and return exit code
@@ -821,13 +870,25 @@ function M.get_update_info()
         res.latest_version = base_ver(res.latest_full) or res.latest_full
         -- Background refresh if cache is stale (returns cached value, no UI flash)
         if is_cache_stale(cache_file) then
-            ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--check"})
+            spawn_update("--check")
         end
     else
-        -- No cache — trigger async version check
-        ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--check"})
-        res.latest_version = "checking..."
-        res.latest_full = "checking..."
+        -- No cache. A check that failed in the last 10 minutes (ts-fix-update --check leaves
+        -- the marker) is not retried: the page asks again every 3 s while this reads
+        -- "checking...", and each answer would start another check. "unknown" yields no update.
+        -- A negative age means the clock was set back after the marker was written; it does not
+        -- hold a check off.
+        local fail_file = "/tmp/ts-fix-latest-version.failed"
+        local fail_age = fs.access(fail_file) and file_age(fail_file)
+        if fail_age and fail_age >= 0 and fail_age < 600 then
+            res.latest_version = "unavailable"
+            res.latest_full = "unknown"
+        else
+            -- Trigger async version check
+            spawn_update("--check")
+            res.latest_version = "checking..."
+            res.latest_full = "checking..."
+        end
     end
 
     -- Update decision. Different base version → update (unchanged semantics).
@@ -864,8 +925,9 @@ end
     @out string ?status     Status message
 --]]
 function M.do_update()
-    -- Check if update is already running
-    if fs.access("/tmp/ts-fix-update.lock") then
+    -- Check if an update or restore is running. The lock file alone does not say so: a killed run
+    -- leaves it behind, and the Update button then refused for good.
+    if update_holder_alive() then
         return { err_code = -1, err_msg = "Update already in progress" }
     end
 
@@ -873,7 +935,8 @@ function M.do_update()
     cached_ts_version = nil
 
     -- Launch update in background
-    ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--install"})
+    mark_update_starting()
+    spawn_update("--install")
 
     return { status = "update_started" }
 end
@@ -894,7 +957,19 @@ function M.get_update_status()
             local content = f:read("*a")
             f:close()
             local ok, data = pcall(cjson.decode, content)
-            if ok then return data end
+            if ok then
+                -- "running" with no live updater behind it and unchanged for 20 s: the run was
+                -- killed before its exit trap could say so. Reported as that trap reports it; the
+                -- file is left as it is. A negative age (the clock was set back after the file was
+                -- written) reads the same way, since with no updater nothing will rewrite it.
+                if type(data) == "table" and data.status == "running" and not update_holder_alive() then
+                    local age = file_age(status_file)
+                    if age and (age > 20 or age < 0) then
+                        return { status = "error", message = "Interrupted unexpectedly - check network and retry" }
+                    end
+                end
+                return data
+            end
         end
     end
     return { status = "idle", message = "" }
@@ -914,10 +989,16 @@ function M.do_restore()
         return { err_code = -1, err_msg = "Factory binaries not found in /rom/" }
     end
 
+    -- Same gate as do_update: they share the updater's lock
+    if update_holder_alive() then
+        return { err_code = -1, err_msg = "Another update or restore is in progress" }
+    end
+
     -- Clear cached version (binary will change)
     cached_ts_version = nil
 
-    ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--restore"})
+    mark_update_starting()
+    spawn_update("--restore")
     return { status = "restore_started" }
 end
 
@@ -952,11 +1033,11 @@ function M.get_plugin_info()
         end
         -- Background refresh if cache is stale (returns cached value, no UI flash)
         if is_cache_stale(cache_file) then
-            ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--check-plugin"})
+            spawn_update("--check-plugin")
         end
     else
         -- No cache — trigger async version check
-        ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--check-plugin"})
+        spawn_update("--check-plugin")
         res.latest_version = "checking..."
         res.release_url = ""
     end
@@ -970,8 +1051,11 @@ end
     @method-desc: Force re-check of both Tailscale and plugin versions (clears cache)
 --]]
 function M.force_check_versions()
-    ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--check"})
-    ngx.pipe.spawn({"/usr/bin/ts-fix-update", "--check-plugin"})
+    -- Drop the failed-check marker first: the page asks for the version straight after this, and
+    -- with the marker it would read "unavailable" and not poll for the check started here.
+    os.remove("/tmp/ts-fix-latest-version.failed")
+    spawn_update("--check")
+    spawn_update("--check-plugin")
     return {}
 end
 

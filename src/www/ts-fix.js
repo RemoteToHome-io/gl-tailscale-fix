@@ -559,6 +559,11 @@ function refreshUI() {
       checking.className = 'ts-fix-status';
       checking.textContent = 'checking for updates...';
       verEl.appendChild(checking);
+    } else if (updateState.latest_version === 'unavailable') {
+      var checkFailed = document.createElement('span');
+      checkFailed.className = 'ts-fix-status';
+      checkFailed.textContent = '(update check failed)';
+      verEl.appendChild(checkFailed);
     } else if (updateState.latest_version && !updateState.update_available
                && updateState.latest_version !== 'checking...') {
       var upToDate = document.createElement('span');

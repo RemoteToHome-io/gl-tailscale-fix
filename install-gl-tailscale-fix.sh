@@ -14,13 +14,17 @@ download_file() {
     src="$1"
     dst="$2"
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -q "$src" -O "$dst"
+    # curl first when it is installed: GL's wget is uclient-fetch, which cannot read a response
+    # header line longer than its 4 KB read buffer and waits for its timeout instead (GL-AXT1800
+    # 4.8.4, measured 2026-11-12). GitHub's release-download redirects carry a 4,175-byte one,
+    # counting its line ending.
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 15 --max-time 120 "$src" -o "$dst"
         return $?
     fi
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$src" -o "$dst"
+    if command -v wget >/dev/null 2>&1; then
+        wget -q "$src" -O "$dst"
         return $?
     fi
 
